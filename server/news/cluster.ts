@@ -168,6 +168,12 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
         const target = (db.prepare('SELECT cluster_id FROM articles WHERE id = ?').get(u.otherArticleId) as { cluster_id: number | null } | undefined)?.cluster_id;
         if (!target || target === mine.cluster_id) continue; // the matched article is gone, unclustered, or already in the same story
         if (!db.prepare('SELECT 1 FROM story_clusters WHERE id = ?').get(target)) continue;
+        // Moving the LAST article out of a story deletes that story, and everything the user attached to it (bookmark, rating, rated publishers,
+        // read/hidden) would cascade away with it, including anything done while the model was thinking. Carry it to the target first, with the same
+        // rules as a manual merge, in this same transaction (state transfer, move and deletion succeed or fail together).
+        if (mine.cluster_id && mine.cluster_id !== target && (db.prepare('SELECT COUNT(*) n FROM articles WHERE cluster_id = ?').get(mine.cluster_id) as { n: number }).n === 1) {
+          transferUserState(db, target, [mine.cluster_id]);
+        }
         const old = moveArticle(db, u.articleId, target);
         touched.add(target);
         if (old) { recomputeCluster(db, old); touched.delete(old); }
