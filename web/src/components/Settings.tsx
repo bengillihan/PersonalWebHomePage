@@ -203,7 +203,7 @@ function Diagnostics() {
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="text-base font-semibold">Diagnostics</h3><button className="btn btn-outline" onClick={reload}>Reload</button></div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat k="Articles" v={d.counts.articles} /><Stat k="Stories (clusters)" v={d.counts.clusters} /><Stat k="Multi-source stories" v={d.counts.multiSourceClusters} /><Stat k="Headline-only" v={d.counts.headlineOnly} />
+        <Stat k="Articles" v={d.counts.articles} /><Stat k="Stories (clusters)" v={d.counts.clusters} /><Stat k="Multi-source stories" v={d.counts.multiSourceClusters} /><Stat k="Headline-only" v={d.counts.headlineOnly} /><Stat k="Unclustered articles" v={d.counts.unclusteredArticles ?? 0} />
         <Stat k="DB size" v={`${d.db.approxSizeMB} MB`} /><Stat k="WAL size" v={`${d.db.walSizeMB} MB`} /><Stat k="Memory (RSS)" v={`${d.memoryMB.rss} MB`} /><Stat k="Uptime" v={`${Math.round(d.uptimeSec / 60)} min`} />
       </div>
       <div className="card space-y-1 p-4 text-sm"><h4 className="font-medium">Database &amp; storage</h4>

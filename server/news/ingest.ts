@@ -159,17 +159,22 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
 
 export async function processNewArticles(deps: IngestDeps, ids: number[]): Promise<{ ai: number; clusters: number }> {
   const { db, ai } = deps;
-  if (ids.length) {
+  // Articles an earlier run ingested but never clustered (e.g. a refresh that failed part-way) have no story and would stay invisible forever,
+  // so they are picked up again here. Bounded, recent and unlocked only (a user-ungrouped article is never auto-regrouped).
+  const retentionCut = Date.now() - getPrefs(db).retentionDays * 86_400_000;
+  const orphans = (db.prepare('SELECT id FROM articles WHERE cluster_id IS NULL AND cluster_locked = 0 AND published_at >= ? ORDER BY published_at LIMIT 200').all(retentionCut) as { id: number }[]).map((r) => r.id);
+  const todo = [...new Set([...ids, ...orphans])];
+  if (todo.length) {
     // 1. Local fallback summaries immediately so the reader never waits on AI.
     const upd = db.prepare(`UPDATE articles SET summary=@s, summary_kind=@k WHERE id=@id AND (summary_kind IS NULL OR summary_kind != 'ai' OR ai_content_hash != content_hash) AND (summary IS NOT @s OR summary_kind IS NOT @k)`);
-    for (const id of ids) {
+    for (const id of todo) {
       const a = db.prepare('SELECT excerpt, title FROM articles WHERE id=?').get(id) as any;
       const fb = sentencesFallback(a.excerpt, a.title);
       upd.run({ s: fb.text, k: fb.kind, id });
     }
   }
   const clustered = (id: number) => (db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id as number | null;
-  const clusters = await clusterArticles(db, ai, ids.filter((id) => !clustered(id)));
+  const clusters = await clusterArticles(db, ai, todo.filter((id) => !clustered(id)));
   for (const id of ids) { const cid = clustered(id); if (cid) clusters.add(cid); } // corrected articles: let AI summaries regenerate when available
   // 2. AI classification/summaries for anything not yet analysed at its current content hash.
   let aiCount = 0;
@@ -185,12 +190,15 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
     })();
   }
   // Repair/upgrade recent grouped stories that still lack a usable summary or were never judged for an AI summary (bounded per refresh).
+  // Single-article stories created by a run that failed before its final recompute have no summary/kind yet: derive them locally (no AI).
+  const unfinished = db.prepare('SELECT id FROM story_clusters WHERE article_count = 1 AND summary_kind IS NULL AND last_published_at >= ? ORDER BY last_published_at DESC LIMIT 50').all(Date.now() - 14 * 86_400_000) as { id: number }[];
+  for (const r of unfinished) clusters.add(r.id);
   const needSummary = db.prepare(`SELECT id FROM story_clusters WHERE article_count > 1 AND last_published_at >= ?
     AND (summary IS NULL OR TRIM(summary) = '' OR summary_hash IS NULL) ORDER BY last_published_at DESC LIMIT 10`).all(Date.now() - 7 * 86_400_000) as { id: number }[];
   for (const r of needSummary) clusters.add(r.id);
   for (const cid of clusters) recomputeCluster(db, cid);
   await summarizeClusters(deps, clusters);
-  indexArticleTopics(db, ids);
+  indexArticleTopics(db, todo);
   return { ai: aiCount, clusters: clusters.size };
 }
 
@@ -260,6 +268,7 @@ export class Refresher {
     const { db, log } = this.deps;
     const started = Date.now();
     const job = Number(db.prepare("INSERT INTO processing_jobs (kind, status, trigger, started_at) VALUES ('news_refresh','running',?,?)").run(reason, started).lastInsertRowid);
+    let stage = 'ingest'; // named in the job error so a failure says where it happened
     try {
       const sources = db.prepare('SELECT * FROM sources WHERE enabled = 1').all() as SourceRow[];
       const ids: number[] = [];
@@ -270,8 +279,10 @@ export class Refresher {
         if (h === 'ok') ok++; else failed++;
         ids.push(...got);
       });
+      stage = 'process';
       const { ai, clusters } = await processNewArticles(this.deps, [...new Set(ids)]);
       const lastPrune = getSetting<number>(db, 'last_prune_at', 0);
+      stage = 'prune';
       if (Date.now() - lastPrune > 86_400_000) { pruneOldData(db); setSetting(db, 'last_prune_at', Date.now()); }
       setSetting(db, 'last_news_refresh_at', Date.now());
       const stats: RefreshStats = { sources: sources.length, ok, failed, newArticles: ids.length, aiSummarized: ai, clusters, durationMs: Date.now() - started };
@@ -279,8 +290,9 @@ export class Refresher {
       log.info(stats, 'news refresh complete');
       return stats;
     } catch (e) {
-      db.prepare("UPDATE processing_jobs SET status='error', finished_at=?, error=? WHERE id=?").run(Date.now(), String((e as Error).message).slice(0, 500), job);
-      log.error({ err: (e as Error).message }, 'news refresh failed');
+      const message = `${stage}: ${String((e as Error).message)}`.slice(0, 500);
+      db.prepare("UPDATE processing_jobs SET status='error', finished_at=?, error=? WHERE id=?").run(Date.now(), message, job);
+      log.error({ err: message, code: (e as any)?.code }, 'news refresh failed');
       throw e;
     }
   }

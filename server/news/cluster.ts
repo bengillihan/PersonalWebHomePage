@@ -119,45 +119,61 @@ function refreshClusterSummary(db: DB, cur: any, ordered: any[]): void {
   db.prepare('UPDATE story_clusters SET summary=?, summary_kind=?, differences=NULL, summary_hash=? WHERE id=?').run(summary, kind, marker, cur.id);
 }
 
-/** Assigns each new article to an existing cluster, or creates a singleton. Returns touched cluster ids. */
+/**
+ * Assigns each new article to an existing cluster, or creates a singleton. Returns touched cluster ids.
+ *
+ * Two phases, each ONE transaction, because a cluster can disappear between steps (moving an article out of its singleton deletes that
+ * singleton) and a later step that remembered the old cluster id would point at a row that no longer exists (FOREIGN KEY constraint failed):
+ *  1. (synchronous) assign every article. All-or-nothing: a failure leaves no half-clustered batch, and the articles that are still
+ *     unclustered are picked up again by the next refresh (see processNewArticles).
+ *  2. (after the model answers) apply the confirmed matches. The target is the cluster the matched ARTICLE lives in NOW, re-read here, never a
+ *     cluster id remembered from phase 1. A target that vanished during the await (another refresh, "Check now") is skipped, not followed.
+ */
 export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[], maxAiPairs = 20): Promise<Set<number>> {
   const touched = new Set<number>();
-  const uncertain: { id: number; articleId: number; clusterId: number; a: any; b: any }[] = [];
+  const uncertain: { id: number; articleId: number; otherArticleId: number; a: any; b: any }[] = [];
   const getArt = db.prepare('SELECT id, title, publisher, published_at FROM articles WHERE id = ?');
   const cands = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.cluster_id FROM articles a
     WHERE a.cluster_id IS NOT NULL AND a.id != ? AND a.published_at BETWEEN ? AND ?`);
   let pairId = 0;
-  for (const id of articleIds) {
-    const art = getArt.get(id) as any;
-    if (!art) continue;
-    const existing = (db.prepare('SELECT cluster_id, cluster_locked FROM articles WHERE id = ?').get(id) as any);
-    if (existing.cluster_id) { touched.add(existing.cluster_id); continue; }
-    let best = { score: 0, clusterId: 0, other: null as any };
-    for (const c of cands.all(id, art.published_at - WINDOW_MS, art.published_at + WINDOW_MS) as any[]) {
-      const s = headlineSimilarity(art.title, c.title);
-      if (s > best.score) best = { score: s, clusterId: c.cluster_id, other: c };
-    }
-    if (best.score >= MERGE_THRESHOLD) {
-      moveArticle(db, id, best.clusterId); touched.add(best.clusterId);
-      recomputeCluster(db, best.clusterId, true);
-    } else {
-      const cid = createSingleton(db, id); touched.add(cid);
-      if (best.score >= UNCERTAIN_THRESHOLD && ai?.canCall() && uncertain.length < maxAiPairs) {
-        uncertain.push({ id: ++pairId, articleId: id, clusterId: best.clusterId, a: art, b: best.other });
+  db.transaction(() => {
+    for (const id of articleIds) {
+      const art = getArt.get(id) as any;
+      if (!art) continue;
+      const existing = (db.prepare('SELECT cluster_id, cluster_locked FROM articles WHERE id = ?').get(id) as any);
+      if (existing.cluster_id) { touched.add(existing.cluster_id); continue; }
+      let best = { score: 0, clusterId: 0, other: null as any };
+      for (const c of cands.all(id, art.published_at - WINDOW_MS, art.published_at + WINDOW_MS) as any[]) {
+        const s = headlineSimilarity(art.title, c.title);
+        if (s > best.score) best = { score: s, clusterId: c.cluster_id, other: c };
+      }
+      if (best.score >= MERGE_THRESHOLD) {
+        moveArticle(db, id, best.clusterId); touched.add(best.clusterId);
+        recomputeCluster(db, best.clusterId, true);
+      } else {
+        const cid = createSingleton(db, id); touched.add(cid);
+        if (best.score >= UNCERTAIN_THRESHOLD && ai?.canCall() && uncertain.length < maxAiPairs) {
+          uncertain.push({ id: ++pairId, articleId: id, otherArticleId: best.other.id, a: art, b: best.other });
+        }
       }
     }
-  }
+  })();
   if (uncertain.length && ai) {
     const verdicts = await ai.verifyPairs(uncertain.map((u) => ({ id: u.id, a: { publisher: u.a.publisher, title: u.a.title, publishedAt: u.a.published_at }, b: { publisher: u.b.publisher, title: u.b.title, publishedAt: u.b.published_at } })));
-    for (const u of uncertain) {
-      if (verdicts.get(u.id) !== true) continue; // unknown or false => keep separate
-      const locked = (db.prepare('SELECT cluster_locked FROM articles WHERE id = ?').get(u.articleId) as any).cluster_locked;
-      if (locked) continue;
-      const old = moveArticle(db, u.articleId, u.clusterId);
-      touched.add(u.clusterId);
-      if (old) { recomputeCluster(db, old); touched.delete(old); }
-      recomputeCluster(db, u.clusterId, true);
-    }
+    db.transaction(() => {
+      for (const u of uncertain) {
+        if (verdicts.get(u.id) !== true) continue; // unknown or false => keep separate
+        const mine = db.prepare('SELECT cluster_id, cluster_locked FROM articles WHERE id = ?').get(u.articleId) as { cluster_id: number | null; cluster_locked: number } | undefined;
+        if (!mine || mine.cluster_locked) continue;
+        const target = (db.prepare('SELECT cluster_id FROM articles WHERE id = ?').get(u.otherArticleId) as { cluster_id: number | null } | undefined)?.cluster_id;
+        if (!target || target === mine.cluster_id) continue; // the matched article is gone, unclustered, or already in the same story
+        if (!db.prepare('SELECT 1 FROM story_clusters WHERE id = ?').get(target)) continue;
+        const old = moveArticle(db, u.articleId, target);
+        touched.add(target);
+        if (old) { recomputeCluster(db, old); touched.delete(old); }
+        recomputeCluster(db, target, true);
+      }
+    })();
   }
   return touched;
 }
