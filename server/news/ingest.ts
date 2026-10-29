@@ -4,7 +4,8 @@ import type { Ai, ArticleInput } from '../ai/gemini.js';
 import { BASE_CATEGORIES, MIN_CLUSTER_EXCERPT } from '../ai/gemini.js';
 import { fetchWithRetry } from '../net/safeFetch.js';
 import { getPrefs } from '../settings.js';
-import { assessFreshness, cleanAggregatorItem, googleNewsFeedUrl, itemOnDomain, parseFeed, type FeedItem } from './feed.js';
+import { cleanAggregatorItem, googleNewsFeedUrl, itemOnDomain, parseFeed, type FeedItem } from './feed.js';
+import { refreshHealth } from './health.js';
 import { canonicalizeUrl, normalizeTitle, sha1, sha256 } from './normalize.js';
 import { clusterArticles, clusterContentHash, isUsableSummary, recomputeCluster } from './cluster.js';
 import { indexArticleTopics, loadTopics } from './topics.js';
@@ -82,20 +83,29 @@ function sectionHints(json: string | null): string[] {
 export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.now()): Promise<number[]> {
   const { db } = deps;
   const url = feedUrlFor(s);
-  const touch = db.prepare('UPDATE sources SET health=?, last_checked_at=?, last_success_at=COALESCE(?, last_success_at), last_item_at=COALESCE(?, last_item_at), last_error=?, etag=COALESCE(?, etag), last_modified=COALESCE(?, last_modified) WHERE id=?');
-  if (!url) { touch.run('error', now, null, null, 'No feed URL configured', null, null, s.id); return []; }
+  // Connectivity and content freshness are tracked separately: last_success_at moves on any successful connection (200 or 304),
+  // last_item_at only moves when a newer article publication date is actually seen. Health is then re-evaluated from stored data.
+  const record = db.prepare(`UPDATE sources SET last_checked_at=@now, last_success_at=CASE WHEN @ok=1 THEN @now ELSE last_success_at END,
+    last_item_at=CASE WHEN @newest IS NOT NULL AND (last_item_at IS NULL OR @newest > last_item_at) THEN @newest ELSE last_item_at END,
+    last_error=@error, etag=COALESCE(@etag, etag), last_modified=COALESCE(@lm, last_modified) WHERE id=@id`);
+  const finish = (p: { ok: boolean; newest?: number | null; error?: string | null; etag?: string | null; lm?: string | null }) => {
+    record.run({ now, ok: p.ok ? 1 : 0, newest: p.newest ?? null, error: p.error ?? null, etag: p.etag ?? null, lm: p.lm ?? null, id: s.id });
+    refreshHealth(db, s.id, now);
+  };
+  if (!url) { finish({ ok: false, error: 'No feed URL configured' }); return []; }
   const retentionCut = now - getPrefs(db).retentionDays * 86_400_000;
   try {
     const headers: Record<string, string> = {};
     if (s.etag) headers['if-none-match'] = s.etag;
     if (s.last_modified) headers['if-modified-since'] = s.last_modified;
     const res = await fetchWithRetry(url, { timeoutMs: 12_000, maxBytes: 3_000_000, headers, retries: 2, ...deps.fetchOpts });
-    if (res.status === 304) { db.prepare("UPDATE sources SET last_checked_at=?, last_error=NULL, health=CASE WHEN health='unknown' THEN 'ok' ELSE health END WHERE id=?").run(now, s.id); return []; }
+    if (res.status === 304) { finish({ ok: true }); return []; } // connected fine; freshness is judged from the stored newest-article date
     if (res.status >= 400) throw new Error(res.status === 403 ? 'HTTP 403 (the site blocks automated feed readers)' : `HTTP ${res.status}`);
     const feed = parseFeed(res.text(), now);
-    const fresh = assessFreshness(feed, now);
-    touch.run(fresh.status, now, fresh.status === 'error' ? null : now, fresh.newest, fresh.status === 'ok' ? null : fresh.reason ?? null,
-      String(res.headers.etag ?? '') || null, String(res.headers['last-modified'] ?? '') || null, s.id);
+    const dates = feed.items.map((it) => it.publishedAt).filter((d): d is number => d != null);
+    const meta = { etag: String(res.headers.etag ?? '') || null, lm: String(res.headers['last-modified'] ?? '') || null };
+    if (!dates.length) { finish({ ok: true, error: 'Feed has no valid dated items', ...meta }); return []; }
+    finish({ ok: true, newest: Math.max(...dates), ...meta });
     const domain = s.kind === 'aggregator' ? domainOf(s.aggregator_query) : null;
     const ids: number[] = [];
     const seen = new Set<string>(); // in-batch duplicates (same canonical URL twice in one feed)
@@ -141,7 +151,7 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
     })();
     return ids;
   } catch (e) {
-    touch.run('error', now, null, null, String((e as Error).message).slice(0, 300), null, null, s.id);
+    finish({ ok: false, error: String((e as Error).message).slice(0, 300) });
     deps.log.warn({ source: s.name, err: (e as Error).message }, 'source fetch failed');
     return [];
   }

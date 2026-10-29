@@ -3,6 +3,7 @@ import { memDb, fixtureServer, rss, hoursAgo, logger, type Fixture } from './hel
 import { ingestSource, processNewArticles, Refresher, pruneOldData, type SourceRow } from '../server/news/ingest.js';
 import { headlineSimilarity, ungroupArticle, mergeClusters } from '../server/news/cluster.js';
 import { discoverFeeds } from '../server/news/discover.js';
+import { evaluateSource } from '../server/news/health.js';
 import { seedDefaults } from '../server/seed.js';
 
 let fx: Fixture;
@@ -42,7 +43,8 @@ describe('ingestion', () => {
     const stale = addSource(db, 'stale', '/stale'), html = addSource(db, 'html', '/html'), blocked = addSource(db, 'blocked', '/blocked');
     await Promise.all([stale, html, blocked].map((s) => ingestSource(deps, s)));
     const h = (id: number) => db.prepare('SELECT health, last_error FROM sources WHERE id=?').get(id) as any;
-    expect(h(stale.id).health).toBe('stale'); expect(h(stale.id).last_error).toMatch(/days old/);
+    expect(h(stale.id).health).toBe('stale'); expect(h(stale.id).last_error).toBeNull(); // stale content is not a failure: last_error is for failed checks only
+    expect(evaluateSource(db.prepare('SELECT * FROM sources WHERE id=?').get(stale.id) as any).reason).toMatch(/Newest article is \d+h old/);
     expect(h(html.id).health).toBe('error');
     expect(h(blocked.id).health).toBe('error'); expect(h(blocked.id).last_error).toMatch(/403/);
     expect((db.prepare('SELECT COUNT(*) n FROM articles').get() as any).n).toBe(0); // 2018 item is older than retention

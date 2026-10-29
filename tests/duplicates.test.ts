@@ -173,8 +173,8 @@ describe('migration 2: article_sources', () => {
 
     expect(migrate(raw as DB)).toEqual(MIGRATIONS.slice(1).map((m) => m.id)); // applies everything after init, including 2
     expect(raw.prepare('SELECT article_id, source_id, first_seen_at FROM article_sources ORDER BY article_id').all()).toEqual([{ article_id: a1, source_id: s1, first_seen_at: 111 }, { article_id: a2, source_id: s2, first_seen_at: 222 }]);
-    // existing rows are untouched; later migrations only add columns (articles.blocked, which must default to 0)
-    expect(['sources', 'articles', 'story_clusters', 'bookmarks', 'feedback', 'reading_state', 'ai_cache', 'application_settings'].map((t) => JSON.stringify((raw.prepare(`SELECT * FROM ${t}`).all() as any[]).map(({ blocked, ...rest }) => { if (t === 'articles') expect(blocked).toBe(0); return t === 'articles' ? rest : { ...rest, ...(blocked === undefined ? {} : { blocked }) }; })))).toEqual(before);
+    // existing rows are untouched; later migrations only add columns (articles.blocked and sources.freshness_hours, both defaulting to empty/0)
+    expect(['sources', 'articles', 'story_clusters', 'bookmarks', 'feedback', 'reading_state', 'ai_cache', 'application_settings'].map((t) => JSON.stringify((raw.prepare(`SELECT * FROM ${t}`).all() as any[]).map(({ blocked, freshness_hours, ...rest }) => { if (t === 'articles') expect(blocked).toBe(0); if (t === 'sources') expect(freshness_hours).toBeNull(); return rest; })))).toEqual(before);
     expect(migrate(raw as DB)).toEqual([]); expect((raw.prepare('SELECT COUNT(*) n FROM article_sources').get() as any).n).toBe(2);
     raw.prepare('DELETE FROM sources WHERE id = ?').run(s2); // cascades remove only that feed's associations
     expect(raw.prepare('SELECT source_id FROM article_sources').all()).toEqual([{ source_id: s1 }]);

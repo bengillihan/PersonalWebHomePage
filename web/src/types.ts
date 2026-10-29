@@ -14,7 +14,7 @@ export interface Quote {
 }
 export interface Source {
   id: number; name: string; siteUrl: string; feedUrl: string | null; kind: 'rss' | 'aggregator'; aggregatorLabel: string | null; priority: 'high' | 'normal' | 'low';
-  enabled: boolean; coverage: 'comprehensive' | 'interest'; categories: string[]; isLocal: boolean; health: 'unknown' | 'ok' | 'stale' | 'error';
+  enabled: boolean; coverage: 'comprehensive' | 'interest'; categories: string[]; isLocal: boolean; health: 'unknown' | 'ok' | 'stale' | 'error' | 'disabled'; statusReason: string | null; freshnessHours: number | null; freshnessDefaultHours: number;
   lastCheckedAt: number | null; lastSuccessAt: number | null; lastItemAt: number | null; lastError: string | null; articleCount: number;
 }
 export interface Topic { id: number; name: string; kind: 'category' | 'interest'; description: string; priority: 'high' | 'normal' | 'low'; include: string[]; exclude: string[] }

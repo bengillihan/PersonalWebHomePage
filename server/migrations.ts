@@ -219,4 +219,10 @@ INSERT INTO article_sources (article_id, source_id, first_seen_at) SELECT id, so
     // article is ingested; interest-only sources never surface blocked articles.
     sql: 'ALTER TABLE articles ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;',
   },
+  {
+    id: 4,
+    name: 'source_freshness_hours',
+    // Per-source override of how long a feed may go without a new article before it is 'stale' (NULL = default: 24h major, 72h local).
+    sql: 'ALTER TABLE sources ADD COLUMN freshness_hours INTEGER CHECK (freshness_hours IS NULL OR freshness_hours BETWEEN 1 AND 336);',
+  },
 ];

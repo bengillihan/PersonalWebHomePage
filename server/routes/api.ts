@@ -16,6 +16,7 @@ import { explainStory, queryFeed } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics } from '../news/topics.js';
 import { getPrefs, savePrefs } from '../settings.js';
+import { evaluateSource, MAX_FRESHNESS_HOURS, refreshHealth } from '../news/health.js';
 import { RANGES, type MarketService, type Range } from '../market/service.js';
 import { ProviderError, type MarketProvider } from '../market/provider.js';
 
@@ -28,11 +29,12 @@ const kw = z.array(z.string().trim().min(1).max(60)).max(30);
 
 function sourceDto(s: any) {
   const feed = feedUrlFor(s);
+  const ev = evaluateSource(s); // evaluated now from stored columns: no network, and correct even if no check ran recently
   return {
     id: s.id, name: s.name, siteUrl: s.site_url, feedUrl: feed && s.kind === 'rss' ? feed : null, kind: s.kind,
     aggregatorLabel: s.kind === 'aggregator' ? `Aggregated via Google News: domain-restricted search "${s.aggregator_query}" (keyword-based, not the publisher's own section feed); links open through Google News` : null,
     priority: prioOut(s.priority), enabled: !!s.enabled, coverage: s.coverage, categories: JSON.parse(s.categories), isLocal: !!s.is_local,
-    health: s.health, lastCheckedAt: s.last_checked_at, lastSuccessAt: s.last_success_at, lastItemAt: s.last_item_at, lastError: s.last_error,
+    health: ev.status, statusReason: ev.status === 'stale' ? ev.reason : null, freshnessHours: s.freshness_hours ?? null, freshnessDefaultHours: ev.defaultHours, lastCheckedAt: s.last_checked_at, lastSuccessAt: s.last_success_at, lastItemAt: s.last_item_at, lastError: s.last_error,
     articleCount: s.article_count ?? 0,
   };
 }
@@ -136,14 +138,16 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   });
   app.patch('/api/sources/:id', async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const b = z.object({ name: z.string().trim().min(1).max(80).optional(), enabled: z.boolean().optional(), priority: prio.optional(), coverage: z.enum(['comprehensive', 'interest']).optional(), categories: kw.optional(), isLocal: z.boolean().optional() }).parse(req.body);
+    const b = z.object({ name: z.string().trim().min(1).max(80).optional(), enabled: z.boolean().optional(), priority: prio.optional(), coverage: z.enum(['comprehensive', 'interest']).optional(), categories: kw.optional(), isLocal: z.boolean().optional(), freshnessHours: z.number().int().min(1).max(MAX_FRESHNESS_HOURS).nullable().optional() }).parse(req.body);
     if (!db.prepare('SELECT 1 FROM sources WHERE id = ?').get(id)) return reply.code(404).send({ error: 'not_found' });
     const sets: string[] = []; const vals: any[] = [];
     const add = (c: string, v: unknown) => { sets.push(`${c} = ?`); vals.push(v); };
     if (b.name !== undefined) add('name', b.name); if (b.enabled !== undefined) add('enabled', b.enabled ? 1 : 0);
     if (b.priority !== undefined) add('priority', b.priority); if (b.coverage !== undefined) add('coverage', b.coverage);
     if (b.categories !== undefined) add('categories', JSON.stringify(b.categories)); if (b.isLocal !== undefined) add('is_local', b.isLocal ? 1 : 0);
+    if (b.freshnessHours !== undefined) add('freshness_hours', b.freshnessHours);
     if (sets.length) db.prepare(`UPDATE sources SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
+    refreshHealth(db, id); // thresholds / locality / enabled changed: re-evaluate from stored data (local, no network)
     // Coverage is evaluated at query time, so it takes effect immediately. Categories feed story categories: refresh the affected stories (local, no AI).
     if (b.categories !== undefined) {
       const clusters = db.prepare(`SELECT cluster_id FROM articles WHERE source_id = @id AND cluster_id IS NOT NULL
