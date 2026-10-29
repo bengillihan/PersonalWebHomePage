@@ -35,7 +35,7 @@ export interface FeedPage { items: StoryDto[]; nextCursor: string | null; total?
 export const eligibleSql = (hardBlocks: boolean, mutedCount = 0) => `EXISTS (SELECT 1 FROM articles ea WHERE ea.cluster_id = c.id${mutedCount ? ` AND lower(ea.publisher) NOT IN (${Array(mutedCount).fill('?').join(',')})` : ''}${hardBlocks ? ` AND NOT EXISTS (SELECT 1 FROM article_blocks ab JOIN blocked_topics bt ON bt.id = ab.topic_id WHERE ab.article_id = ea.id AND bt.enabled = 1)` : ''} AND (
     EXISTS (SELECT 1 FROM sources es WHERE es.coverage = 'comprehensive' AND (es.id = ea.source_id
       OR EXISTS (SELECT 1 FROM article_sources ex WHERE ex.article_id = ea.id AND ex.source_id = es.id)))
-    OR (ea.blocked = 0 AND EXISTS (SELECT 1 FROM article_topics et WHERE et.article_id = ea.id))))`;
+    OR (ea.blocked = 0 AND EXISTS (SELECT 1 FROM article_topics et JOIN topics tp ON tp.id = et.topic_id WHERE et.article_id = ea.id AND tp.stance = 'prefer'))))`; // a "show less" match never authorizes a story
 export const ELIGIBLE_SQL = eligibleSql(false);
 
 const SNAPSHOT_MAX = 800; // candidate pool size, and the most ids a cursor can carry
