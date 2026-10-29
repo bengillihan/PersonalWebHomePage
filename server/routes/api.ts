@@ -163,7 +163,10 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
       // Articles that another feed also carries survive: hand them to a remaining feed before the cascade removes this feed's own articles.
       db.prepare(`UPDATE articles SET source_id = (SELECT MIN(x.source_id) FROM article_sources x WHERE x.article_id = articles.id AND x.source_id != @id)
         WHERE source_id = @id AND EXISTS (SELECT 1 FROM article_sources x WHERE x.article_id = articles.id AND x.source_id != @id)`).run({ id });
+      // Stories that lose an article keep living, so their derived fields (title, primary article, counts, summary) must be recomputed.
+      const affected = db.prepare('SELECT DISTINCT cluster_id FROM articles WHERE source_id = @id AND cluster_id IS NOT NULL').all({ id }) as { cluster_id: number }[];
       db.prepare('DELETE FROM sources WHERE id = ?').run(id);
+      for (const r of affected) recomputeCluster(db, r.cluster_id); // also removes a cluster that has no articles left
       db.prepare('DELETE FROM story_clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM articles WHERE cluster_id IS NOT NULL)').run();
     })();
     return { ok: true };
