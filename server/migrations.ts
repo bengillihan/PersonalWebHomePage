@@ -250,4 +250,14 @@ CREATE TABLE article_blocks (
 CREATE INDEX idx_article_blocks_topic ON article_blocks(topic_id);
 `,
   },
+  {
+    id: 6,
+    name: 'ai_usage_completed',
+    // Gemini budget accounting: requests = reserved BEFORE sending (the limit counts attempts), completed = the provider answered with usable output,
+    // errors = failed or unusable. requests - completed - errors = still in flight, or lost to a restart (never refunded).
+    sql: `
+ALTER TABLE ai_usage ADD COLUMN completed INTEGER NOT NULL DEFAULT 0;
+UPDATE ai_usage SET completed = MAX(requests - errors, 0);
+`,
+  },
 ];

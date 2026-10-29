@@ -39,7 +39,7 @@ See `.env.example` for the full annotated list.
 | `SQLITE_PATH` | no | Defaults to `/data/dashboard.sqlite` on Railway, `./data/dashboard.sqlite` locally. |
 | `PORT` | no | Railway injects it. |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | no | AI summaries. Default model `gemini-3.5-flash-lite`. |
-| `AI_DAILY_REQUEST_BUDGET` | no | Max Gemini requests per UTC day (default 200; `0` disables). Editable in Settings. |
+| `AI_DAILY_REQUEST_BUDGET` | no | Max Gemini requests **attempted** per UTC day (default 200; `0` disables). Editable in Settings. See "What the budget counts". |
 | `TWELVEDATA_API_KEY`, `MARKET_PROVIDER` | no | Market prices (see below). |
 | `CRON_TOKEN` | no | Enables `POST /internal/refresh` for an optional external cron. |
 
@@ -60,6 +60,8 @@ The flow uses authorization-code + PKCE with `state` and `nonce`; the ID token i
 Create a key in [Google AI Studio](https://aistudio.google.com/apikey) and set `GEMINI_API_KEY`. **A consumer Gemini subscription does not include API usage**; the API may need its own billing. Model IDs change, so check <https://ai.google.dev/gemini-api/docs/models> and set `GEMINI_MODEL` (default `gemini-3.5-flash-lite`, listed as stable when this was written).
 
 What is sent: only article headline, publisher and the feed's own excerpt (as fenced, untrusted data), never your login or personal data. Results are cached by content hash + task + model + prompt version, so preference changes never re-spend calls. Quota/429 errors trigger a 15-minute backoff, and the reader keeps working with publisher excerpts or headlines. Without a key the app is fully usable, minus AI summaries/classification (importance falls back to a feed-position heuristic).
+
+**What the budget counts.** The limit counts requests *attempted*, per **UTC** calendar day. A request is reserved in SQLite, atomically, before it is sent, so concurrent refreshes can never overspend. A reservation is never refunded once a request may have reached Google: a timeout, error, unusable answer or a restart mid-request can still have been processed and billed, so it stays counted until the daily reset. Diagnostics shows reserved, completed and failed requests separately (reserved minus completed minus failed is in flight or lost to a restart). Cache hits cost nothing.
 
 Cost estimates in Diagnostics use list prices stored in the `ai_price` setting; check Google AI Studio for real billing.
 

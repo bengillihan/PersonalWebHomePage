@@ -55,49 +55,72 @@ const jsonSchemas = {
 const clamp01 = (n: number) => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0.3));
 const fence = (s: string | null | undefined, max: number) => (s ?? '').replace(/<\/?article[^>]*>/gi, '').slice(0, max);
 
+/**
+ * Gemini request budget.
+ *  - The daily limit counts requests ATTEMPTED, not confirmed ones. A request is reserved in SQLite before it is sent, in one atomic statement
+ *    (check and increment together, with no await in between), so concurrent callers can never overspend, even across instances sharing the database.
+ *  - A reservation is never refunded once the request may have reached the provider: a timeout, error, unusable answer or killed process can still have been
+ *    processed (and billed) on Google's side. The day's allowance is only restored by the daily reset.
+ *  - Outcomes are accounted separately: requests (reserved), completed (usable answer), errors (failed or unusable); requests - completed - errors is in flight
+ *    or lost to a restart. Tokens are recorded on completion, to the day the request was RESERVED.
+ *  - A day is the UTC calendar date (toISOString), regardless of the server's time zone. Cache hits never reserve anything.
+ */
 export class Ai {
   private backoffUntil = 0;
-  constructor(private db: DB, private model: string, private transport: AiTransport | null, private envBudget: number) {}
+  constructor(private db: DB, private model: string, private transport: AiTransport | null, private envBudget: number, private clock: () => number = Date.now) {}
 
   get enabled(): boolean { return this.transport !== null; }
 
   dailyBudget(): number { return getSetting<number>(this.db, 'ai_daily_budget', this.envBudget); }
-  private today(): string { return new Date().toISOString().slice(0, 10); }
+  private today(): string { return new Date(this.clock()).toISOString().slice(0, 10); }
   requestsToday(): number {
     return (this.db.prepare('SELECT requests FROM ai_usage WHERE day = ?').get(this.today()) as { requests: number } | undefined)?.requests ?? 0;
   }
-  canCall(): boolean { return this.enabled && Date.now() >= this.backoffUntil && this.requestsToday() < this.dailyBudget(); }
+  /** Cheap pre-check only. The real guard is reserve(), which is atomic. */
+  canCall(): boolean { return this.enabled && this.clock() >= this.backoffUntil && this.requestsToday() < this.dailyBudget(); }
 
   usage() {
     const price = getSetting(this.db, 'ai_price', DEFAULT_PRICE);
-    const rows = this.db.prepare('SELECT * FROM ai_usage ORDER BY day DESC LIMIT 30').all() as { day: string; requests: number; input_tokens: number; output_tokens: number; errors: number }[];
+    const rows = this.db.prepare('SELECT * FROM ai_usage ORDER BY day DESC LIMIT 30').all() as { day: string; requests: number; completed: number; input_tokens: number; output_tokens: number; errors: number }[];
     const cost = (r: { input_tokens: number; output_tokens: number }) => (r.input_tokens * price.inputPerM + r.output_tokens * price.outputPerM) / 1e6;
     const today = rows.find((r) => r.day === this.today());
     return {
       enabled: this.enabled, model: this.model, dailyBudget: this.dailyBudget(), requestsToday: today?.requests ?? 0,
+      completedToday: today?.completed ?? 0, failedToday: today?.errors ?? 0, unsettledToday: today ? Math.max(0, today.requests - today.completed - today.errors) : 0,
       estimatedCostToday: today ? cost(today) : 0, estimatedCost30d: rows.reduce((s, r) => s + cost(r), 0),
-      backoffUntil: this.backoffUntil > Date.now() ? this.backoffUntil : null, days: rows.slice(0, 7),
-      note: 'Estimates use list prices configured in settings (ai_price); check Google AI Studio for actual billing.',
+      backoffUntil: this.backoffUntil > this.clock() ? this.backoffUntil : null, days: rows.slice(0, 7),
+      note: 'The daily limit counts requests attempted (reserved before sending, never refunded) per UTC day. Cost estimates use list prices configured in settings (ai_price); check Google AI Studio for actual billing.',
     };
   }
 
-  private record(inT: number, outT: number, err: boolean) {
-    this.db.prepare(`INSERT INTO ai_usage (day, requests, input_tokens, output_tokens, errors) VALUES (?,1,?,?,?)
-      ON CONFLICT(day) DO UPDATE SET requests = requests + 1, input_tokens = input_tokens + excluded.input_tokens, output_tokens = output_tokens + excluded.output_tokens, errors = errors + excluded.errors`)
-      .run(this.today(), inT, outT, err ? 1 : 0);
+  /** Atomically takes one request from today's allowance. Returns the reserved day, or null if none is left. Single statement: no await between check and increment. */
+  private reserve(): string | null {
+    if (!this.transport || this.clock() < this.backoffUntil) return null;
+    const limit = this.dailyBudget(); if (limit <= 0) return null;
+    const day = this.today();
+    const r = this.db.prepare('INSERT INTO ai_usage (day, requests) VALUES (@day, 1) ON CONFLICT(day) DO UPDATE SET requests = requests + 1 WHERE requests < @limit').run({ day, limit });
+    return r.changes === 1 ? day : null;
+  }
+
+  /** Records how a reserved request ended (exactly once). Never gives the reservation back. */
+  private settle(day: string, ok: boolean, inT = 0, outT = 0) {
+    this.db.prepare(`UPDATE ai_usage SET completed = completed + @ok, errors = errors + @bad, input_tokens = input_tokens + @inT, output_tokens = output_tokens + @outT WHERE day = @day`)
+      .run({ day, ok: ok ? 1 : 0, bad: ok ? 0 : 1, inT, outT });
   }
 
   private async call<T>(task: string, call: JsonCall, schema: z.ZodType<T>): Promise<T | null> {
-    if (!this.transport || !this.canCall()) return null;
+    const day = this.reserve(); // before anything is sent
+    if (!day) return null;
+    let settled = false; const end = (ok: boolean, inT = 0, outT = 0) => { if (!settled) { settled = true; this.settle(day, ok, inT, outT); } };
     try {
-      const r = await this.transport.generateJson(call);
-      this.record(r.inputTokens, r.outputTokens, false);
-      const parsed = schema.safeParse(JSON.parse(r.text));
-      if (!parsed.success) { this.db.prepare('UPDATE ai_usage SET errors = errors + 1 WHERE day = ?').run(this.today()); return null; }
-      return parsed.data;
+      const r = await this.transport!.generateJson(call);
+      let parsed: z.ZodSafeParseResult<T> | null = null;
+      try { parsed = schema.safeParse(JSON.parse(r.text)); } catch { /* not JSON */ }
+      end(Boolean(parsed?.success), r.inputTokens, r.outputTokens); // the provider answered (tokens are real) but the output may be unusable
+      return parsed?.success ? parsed.data : null;
     } catch (e) {
-      this.record(0, 0, true);
-      if (e instanceof QuotaError) this.backoffUntil = Date.now() + 15 * 60_000;
+      end(false);
+      if (e instanceof QuotaError) this.backoffUntil = this.clock() + 15 * 60_000;
       return null; // never block the reader; callers fall back to excerpts/headlines
     }
   }
