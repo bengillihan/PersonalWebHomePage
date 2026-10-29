@@ -222,7 +222,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   });
   app.get('/api/watchlist/search', medium, async (req, reply) => {
     const { q } = z.object({ q: z.string().trim().min(1).max(40) }).parse(req.query);
-    try { return await d.provider.search(q); } catch (e) { if (e instanceof ProviderError) return reply.code(e.kind === 'no_key' ? 503 : 502).send({ error: e.kind, message: e.message }); throw e; }
+    try { return await d.provider.search(q); } catch (e) { if (e instanceof ProviderError) { if (e.retryAfterMs !== undefined) reply.header('retry-after', Math.ceil(e.retryAfterMs / 1000)); return reply.code(e.kind === 'no_key' ? 503 : e.kind === 'rate_limit' ? 429 : 502).send({ error: e.kind, message: e.message }); } throw e; }
   });
   const watchBody = z.object({ symbol: z.string().trim().toUpperCase().regex(/^[A-Z0-9.\-:^]{1,20}$/), name: z.string().trim().min(1).max(120), type: z.enum(['equity', 'etf', 'mutual_fund', 'index']), providerSymbol: z.string().trim().max(30).nullable().optional() });
   app.post('/api/watchlist', async (req, reply) => {

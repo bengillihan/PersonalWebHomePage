@@ -41,6 +41,7 @@ See `.env.example` for the full annotated list.
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | no | AI summaries. Default model `gemini-3.5-flash-lite`. |
 | `AI_DAILY_REQUEST_BUDGET` | no | Max Gemini requests **attempted** per UTC day (default 200; `0` disables). Editable in Settings. See "What the budget counts". |
 | `TWELVEDATA_API_KEY`, `MARKET_PROVIDER` | no | Market prices (see below). |
+| `TWELVEDATA_CREDITS_PER_MINUTE` | no | Rolling per-minute credit allowance shared by all Twelve Data calls (default 8, the Basic plan). |
 | `CRON_TOKEN` | no | Enables `POST /internal/refresh` for an optional external cron. |
 
 ## 1. Google OAuth setup (one-time, by you)

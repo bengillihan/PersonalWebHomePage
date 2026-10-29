@@ -92,6 +92,8 @@ export class MarketService {
   private inflight: Promise<void> | null = null;
   /** Set when a result was discarded or a mapping changed mid-run: one follow-up pass fetches the replacement (cache and rate limits still apply). */
   private rerun = false;
+  /** When our rate limiter last deferred a call, until when. Until then refreshes return immediately (no DB scan, no timers); the cache keeps serving. */
+  private deferredUntil = 0;
   constructor(private db: DB, private provider: MarketProvider) {}
 
   get providerInfo() { return { name: this.provider.name, configured: this.provider.configured }; }
@@ -139,6 +141,7 @@ export class MarketService {
   refreshIfNeeded(force = false): Promise<void> {
     if (!this.provider.configured) return Promise.resolve();
     if (this.inflight) return this.inflight;
+    if (Date.now() < this.deferredUntil) return Promise.resolve();
     this.inflight = (async () => {
       await this.run(force);
       for (let i = 0; i < 3 && this.rerun; i++) { this.rerun = false; await this.run(false); }
@@ -153,7 +156,6 @@ export class MarketService {
     const put = this.db.prepare(`INSERT INTO market_prices (symbol, range, fetched_at, last_value, change_abs, change_pct, as_of, is_daily_nav, series, error)
       VALUES (?, 'daily', ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(symbol, range) DO UPDATE SET fetched_at=excluded.fetched_at, last_value=excluded.last_value,
       change_abs=excluded.change_abs, change_pct=excluded.change_pct, as_of=excluded.as_of, is_daily_nav=excluded.is_daily_nav, series=COALESCE(excluded.series, market_prices.series), error=excluded.error`);
-    let calls = 0;
     for (const listed of this.rows()) {
       // Re-read the entry and its cache right before deciding: the user may have remapped it since this run began.
       const w = this.row(listed.symbol); if (!w) continue;
@@ -162,8 +164,6 @@ export class MarketService {
       const lastBar = c?.series ? (JSON.parse(c.series) as Bar[]).at(-1)?.date ?? null : null;
       if (!force && !needsRefresh(w.instrument_type, { fetchedAt: c?.fetched_at ?? null, lastBarDate: lastBar, hadError }, now)) continue;
       if (force && c && now - c.fetched_at < 60_000) continue;
-      if (calls >= 7) break; // stay under the 8 credits/minute free tier; the rest refresh on the next request
-      calls++;
       const key = MarketService.mappingKey(w); // captured before the request
       const current = () => { const n = this.row(w.symbol); return n !== undefined && MarketService.mappingKey(n) === key; };
       try {
@@ -173,6 +173,9 @@ export class MarketService {
         const last = s.bars[s.bars.length - 1];
         put.run(w.symbol, Date.now(), last.close, ch?.change ?? null, ch?.pct ?? null, last.date, w.instrument_type === 'mutual_fund' ? 1 : 0, JSON.stringify(s.bars), null);
       } catch (e) {
+        // Our shared limiter deferred this call: nothing was sent, so nothing is recorded (cached prices and their timestamps stay as they were) and the
+        // rest of the run is skipped. The next user-triggered refresh after the window tries again; no timer is set.
+        if (e instanceof ProviderError && e.kind === 'rate_limit' && e.retryAfterMs !== undefined) { this.deferredUntil = Date.now() + e.retryAfterMs; break; }
         if (!current()) { this.rerun = true; continue; }
         const msg = (e as Error).message;
         put.run(w.symbol, Date.now(), null, null, null, null, w.instrument_type === 'mutual_fund' ? 1 : 0, null, msg);

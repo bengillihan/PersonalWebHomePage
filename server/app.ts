@@ -13,7 +13,7 @@ import type { DB } from './db.js';
 import { Ai, createGeminiTransport, type AiTransport } from './ai/gemini.js';
 import { Refresher } from './news/ingest.js';
 import { MarketService } from './market/service.js';
-import { createTwelveData, type MarketProvider } from './market/provider.js';
+import { createTwelveData, CreditLimiter, type MarketProvider } from './market/provider.js';
 import { registerAuth, createGoogleOidc, type OidcClient } from './auth.js';
 import { registerApi } from './routes/api.js';
 import { checkPersistence, type PersistenceReport } from './storage.js';
@@ -41,7 +41,7 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
 
   const transport = o.transport !== undefined ? o.transport : cfg.geminiApiKey ? createGeminiTransport(cfg.geminiApiKey, cfg.geminiModel) : null;
   const ai = new Ai(db, cfg.geminiModel, transport, cfg.aiDailyBudget);
-  const provider = o.provider ?? createTwelveData(cfg.twelveDataKey);
+  const provider = o.provider ?? createTwelveData(cfg.twelveDataKey, undefined, {}, new CreditLimiter(db, cfg.twelveDataCreditsPerMinute));
   const market = new MarketService(db, provider);
   const refresher = new Refresher({ db, ai, log: app.log as any, fetchOpts: o.fetchOpts });
   const oidc = o.oidc !== undefined ? o.oidc : cfg.googleClientId && cfg.googleClientSecret ? createGoogleOidc(cfg) : null;
