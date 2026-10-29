@@ -2,6 +2,7 @@ import type { DB } from '../db.js';
 import { getPrefs } from '../settings.js';
 import { balanceFeed, buildFeedbackModel, scoreCandidate, type Candidate, type Scored } from './rank.js';
 import { loadTopics } from './topics.js';
+import { isUsableSummary } from './cluster.js';
 
 export interface FeedQuery { tab: string; q?: string; topic?: string; cursor?: string; limit?: number }
 export interface StoryDto {
@@ -164,7 +165,7 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const marks = ids.map(() => '?').join(',');
-  const arts = db.prepare(`SELECT a.id, a.cluster_id, a.publisher, a.title, a.url, a.published_at, a.image_url, s.kind FROM articles a JOIN sources s ON s.id = a.source_id
+  const arts = db.prepare(`SELECT a.id, a.cluster_id, a.publisher, a.title, a.url, a.published_at, a.image_url, a.summary, a.summary_kind, s.kind FROM articles a JOIN sources s ON s.id = a.source_id
     WHERE a.cluster_id IN (${marks}) ORDER BY a.published_at ASC`).all(...ids) as any[];
   // Other feeds that carried the very same article (the originating publisher is unchanged; this is only 'also via').
   const via = new Map<number, string[]>();
@@ -179,11 +180,17 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
     const prim0 = list.find((a) => a.id === r.primary_article_id) ?? list[0];
     // A muted publisher's headline/link is not the one shown while an unmuted publisher covers the story.
     const unmuted = list.filter((a) => !isMuted(a));
-    const prim = prim0 && isMuted(prim0) && unmuted.length ? unmuted[0] : prim0;
+    const mutedHere = list.length - unmuted.length > 0 && unmuted.length > 0;
+    // When a muted publisher is part of the story, the headline, link and excerpt all come from ONE unmuted article, preferring one that has usable text.
+    const prim = !mutedHere ? prim0 : [prim0, ...unmuted].find((a) => !isMuted(a) && isUsableSummary(a.summary)) ?? (isMuted(prim0) ? unmuted[0] : prim0);
+    // The stored cluster summary may be an excerpt from the muted publisher or a consolidated AI summary written from its text, so it is not shown:
+    // the visible article's own excerpt is, or the headline-only fallback when that publisher gave none. Nothing is regenerated (no Gemini call).
+    const own = mutedHere && prim && isUsableSummary(prim.summary) ? prim : null;
     const publishers = (xs: { publisher: string }[]) => new Set(xs.map((a) => normName(a.publisher))).size;
     const w = why?.get(r.id);
     return {
-      id: r.id, title: prim === prim0 ? r.title : prim.title, summary: r.summary, summaryKind: r.summary_kind, differences: r.differences, category: r.category,
+      id: r.id, title: prim === prim0 ? r.title : prim.title,
+      summary: mutedHere ? own?.summary ?? null : r.summary, summaryKind: mutedHere ? (own ? own.summary_kind : 'headline') : r.summary_kind, differences: mutedHere ? null : r.differences, category: r.category,
       importance: r.importance, publishedAt: r.last_published_at, updatedAt: r.updated_at,
       sourceCount: unmuted.length ? publishers(unmuted) : r.source_count, mutedSources: unmuted.length ? publishers(list.filter(isMuted)) : 0, // nothing unmuted to prefer: show the real coverage
       isRead: !!r.read_at, isUpdated: !!r.read_at && r.updated_at > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
