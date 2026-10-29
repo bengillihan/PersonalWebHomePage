@@ -8,9 +8,9 @@ import type { BlockedTopic, Story } from '../../web/src/types';
 
 const story = (o: Partial<Story> = {}): Story => ({
   id: 7, title: 'Seahawks beat 49ers in overtime thriller', summary: 'A summary.', summaryKind: 'excerpt', differences: null, category: 'Sports', importance: 0.5,
-  publishedAt: Date.now() - 60_000, updatedAt: 1, sourceCount: 1, isRead: false, isUpdated: false, bookmarked: false, rating: 0, imageUrl: null, blockedBy: [],
+  publishedAt: Date.now() - 60_000, updatedAt: 1, sourceCount: 1, isRead: false, isUpdated: false, bookmarked: false, rating: 0, imageUrl: null, blockedBy: [], mutedSources: 0,
   primary: { publisher: 'General News', url: 'https://example.com/7', aggregated: false },
-  articles: [{ id: 7, publisher: 'General News', title: 'x', url: 'https://example.com/7', publishedAt: 1, aggregated: false, alsoVia: [] }], ...o,
+  articles: [{ id: 7, publisher: 'General News', title: 'x', url: 'https://example.com/7', publishedAt: 1, aggregated: false, alsoVia: [], muted: false }], ...o,
 });
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 

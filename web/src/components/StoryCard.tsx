@@ -79,7 +79,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
         <button className="btn btn-ghost text-xs" onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
         <span className="flex-1" />
         <button className="btn btn-ghost text-xs" onClick={toggleWhy} aria-expanded={why}>Why am I seeing this?</button>
-        {story.sourceCount > 1 && <button className="btn btn-outline text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : `See coverage from ${story.sourceCount} sources`}</button>}
+        {story.sourceCount + story.mutedSources > 1 && <button className="btn btn-outline text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : `See coverage from ${story.sourceCount} ${story.sourceCount === 1 ? 'source' : 'sources'}${story.mutedSources > 0 ? ` (+${story.mutedSources} muted)` : ''}`}</button>}
       </div>
 
       {askReason && story.rating === -1 && (
@@ -110,6 +110,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
               <span className="font-medium">{a.publisher}</span>
               <a className="text-indigo-700 hover:underline dark:text-indigo-300" href={a.url} target="_blank" rel="noopener noreferrer">{a.title}</a>
               <span className="text-xs text-slate-400">{timeAgo(a.publishedAt)}</span>
+              {a.muted && <span className="chip" title="You muted this publisher: it is hidden from your feeds, but listed here because it covers this story.">muted publisher</span>}
               {a.alsoVia.length > 0 && <span className="text-xs text-slate-400" title="Other feeds that carried this same article">also via {a.alsoVia.join(', ')}</span>}
               <button className="text-xs text-slate-400 underline hover:text-slate-600" onClick={() => api(`/api/stories/${story.id}/ungroup`, { method: 'POST', body: { articleId: a.id } }).then(() => onGone(-1))}>ungroup</button>
             </li>

@@ -3,9 +3,10 @@ export interface Story {
   id: number; title: string; summary: string | null; summaryKind: 'ai' | 'excerpt' | 'headline' | null; differences: string | null;
   category: string | null; importance: number; publishedAt: number; updatedAt: number; sourceCount: number;
   isRead: boolean; isUpdated: boolean; bookmarked: boolean; rating: number; imageUrl: string | null;
+  mutedSources: number; // muted publishers also covering this story (listed in coverage, not counted in sourceCount)
   blockedBy: string[];
   primary: { publisher: string; url: string; aggregated: boolean } | null;
-  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[] }[];
+  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[]; muted: boolean }[];
   why?: { score: number; parts: Record<string, number>; reasons: string[]; bucket: string };
 }
 export interface FeedResponse { items: Story[]; nextCursor: string | null; status: Status; hasAnyStories: boolean; showImages: boolean; showRead: boolean }

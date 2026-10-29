@@ -9,7 +9,8 @@ export interface StoryDto {
   category: string | null; importance: number; publishedAt: number; updatedAt: number; sourceCount: number;
   isRead: boolean; isUpdated: boolean; bookmarked: boolean; rating: number; imageUrl: string | null;
   primary: { publisher: string; url: string; aggregated: boolean } | null;
-  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[] }[];
+  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[]; muted: boolean }[];
+  mutedSources: number; // distinct MUTED publishers also covering this story (listed, labelled, not counted in sourceCount)
   blockedBy: string[]; // enabled "Not interested" topics that match EVERY article of this story (it is hidden from feeds, shown in Saved/search)
   why?: { score: number; parts: Record<string, number>; reasons: string[]; bucket: string };
 }
@@ -27,14 +28,17 @@ export interface FeedPage { items: StoryDto[]; nextCursor: string | null; total?
  * that matches an enabled blocked topic cannot make a story eligible, but a story stays visible while at least one of its other articles
  * qualifies, so a single passing mention in one source never hides a story covered for other reasons. Used by every feed except Saved and
  * search; blocked articles stay in SQLite and remain reachable there.
+ * MUTED PUBLISHERS work the same way (also article-level): an article from a muted publisher cannot make a story eligible, but the story stays while
+ * an unmuted publisher still qualifies. Muting is a source preference, entirely separate from blocked topics.
  */
-export const eligibleSql = (hardBlocks: boolean) => `EXISTS (SELECT 1 FROM articles ea WHERE ea.cluster_id = c.id${hardBlocks ? ` AND NOT EXISTS (SELECT 1 FROM article_blocks ab JOIN blocked_topics bt ON bt.id = ab.topic_id WHERE ab.article_id = ea.id AND bt.enabled = 1)` : ''} AND (
+export const eligibleSql = (hardBlocks: boolean, mutedCount = 0) => `EXISTS (SELECT 1 FROM articles ea WHERE ea.cluster_id = c.id${mutedCount ? ` AND lower(ea.publisher) NOT IN (${Array(mutedCount).fill('?').join(',')})` : ''}${hardBlocks ? ` AND NOT EXISTS (SELECT 1 FROM article_blocks ab JOIN blocked_topics bt ON bt.id = ab.topic_id WHERE ab.article_id = ea.id AND bt.enabled = 1)` : ''} AND (
     EXISTS (SELECT 1 FROM sources es WHERE es.coverage = 'comprehensive' AND (es.id = ea.source_id
       OR EXISTS (SELECT 1 FROM article_sources ex WHERE ex.article_id = ea.id AND ex.source_id = es.id)))
     OR (ea.blocked = 0 AND EXISTS (SELECT 1 FROM article_topics et WHERE et.article_id = ea.id))))`;
 export const ELIGIBLE_SQL = eligibleSql(false);
 
 const SNAPSHOT_MAX = 800; // candidate pool size, and the most ids a cursor can carry
+const normName = (s: string) => s.trim().toLowerCase();
 const esc = (s: string) => s.replace(/[\\%_]/g, (m) => '\\' + m);
 const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const dec = (s?: string) => { try { return s ? JSON.parse(Buffer.from(s, 'base64url').toString()) : null; } catch { return null; } };
@@ -52,7 +56,9 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   const where: string[] = []; const params: any[] = [];
   const cutoff = Date.now() - prefs.retentionDays * 86_400_000;
   // Saved lists every bookmark regardless of age (pruneOldData also keeps bookmarked stories); all other tabs honor retention.
-  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(eligibleSql(!(fq.q ?? '').trim())); } // Saved always shows every bookmark
+  const feedView = !(fq.q ?? '').trim(); // exclusions (blocked topics, muted publishers) apply to the feeds, never to explicit search or Saved
+  const muted = prefs.mutedPublishers.map(normName).filter(Boolean);
+  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(eligibleSql(feedView, feedView ? muted.length : 0)); if (feedView) params.push(...muted); } // Saved always shows every bookmark
   if (fq.tab !== 'saved') where.push('rs.hidden_at IS NULL');
   if (fq.tab === 'unread') where.push('rs.read_at IS NULL'); // strictly unread
   // Read stories are hidden from the main feeds unless 'Show read stories' is on. Never hidden in Saved, in Unread's own rule above, or in
@@ -78,7 +84,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
     if (cur) { where.push('(c.last_published_at < ? OR (c.last_published_at = ? AND c.id < ?))'); params.push(cur.t, cur.t, cur.i); }
     const rows = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} ORDER BY c.last_published_at DESC, c.id DESC LIMIT ?`).all(...params, limit + 1) as any[];
     const page = rows.slice(0, limit);
-    const items = hydrate(db, page);
+    const items = hydrate(db, page, undefined, prefs.mutedPublishers);
     const last = page[page.length - 1];
     return { items, nextCursor: rows.length > limit && last ? enc({ t: last.last_published_at, i: last.id }) : null };
   }
@@ -110,7 +116,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   }
   const next = remaining.slice(pos);
   const why = new Map(scoreRows(db, page).map((s) => [s.c.id, s]));
-  return { items: hydrate(db, page, why), nextCursor: next.length ? enc({ r: next, t: total }) : null, total };
+  return { items: hydrate(db, page, why, prefs.mutedPublishers), nextCursor: next.length ? enc({ r: next, t: total }) : null, total };
 }
 
 function scoreRows(db: DB, rows: any[]): Scored[] {
@@ -152,7 +158,9 @@ function scoreRows(db: DB, rows: any[]): Scored[] {
   });
 }
 
-function hydrate(db: DB, rows: any[], why?: Map<number, Scored>): StoryDto[] {
+function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: string[] = []): StoryDto[] {
+  const mutedSet = new Set(mutedNames.map(normName));
+  const isMuted = (a: { publisher: string }) => mutedSet.has(normName(a.publisher));
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const marks = ids.map(() => '?').join(',');
@@ -168,15 +176,20 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>): StoryDto[] {
   for (const a of arts) (by.get(a.cluster_id) ?? by.set(a.cluster_id, []).get(a.cluster_id)!).push(a);
   return rows.map((r) => {
     const list = by.get(r.id) ?? [];
-    const prim = list.find((a) => a.id === r.primary_article_id) ?? list[0];
+    const prim0 = list.find((a) => a.id === r.primary_article_id) ?? list[0];
+    // A muted publisher's headline/link is not the one shown while an unmuted publisher covers the story.
+    const unmuted = list.filter((a) => !isMuted(a));
+    const prim = prim0 && isMuted(prim0) && unmuted.length ? unmuted[0] : prim0;
+    const publishers = (xs: { publisher: string }[]) => new Set(xs.map((a) => normName(a.publisher))).size;
     const w = why?.get(r.id);
     return {
-      id: r.id, title: r.title, summary: r.summary, summaryKind: r.summary_kind, differences: r.differences, category: r.category,
-      importance: r.importance, publishedAt: r.last_published_at, updatedAt: r.updated_at, sourceCount: r.source_count,
+      id: r.id, title: prim === prim0 ? r.title : prim.title, summary: r.summary, summaryKind: r.summary_kind, differences: r.differences, category: r.category,
+      importance: r.importance, publishedAt: r.last_published_at, updatedAt: r.updated_at,
+      sourceCount: unmuted.length ? publishers(unmuted) : r.source_count, mutedSources: unmuted.length ? publishers(list.filter(isMuted)) : 0, // nothing unmuted to prefer: show the real coverage
       isRead: !!r.read_at, isUpdated: !!r.read_at && r.updated_at > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
       imageUrl: prim?.image_url ?? null,
       primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator' } : null,
-      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [] })),
+      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [], muted: isMuted(a) })),
       blockedBy: list.length && list.every((a) => blockedArticles.has(a.id)) ? [...new Set(list.flatMap((a) => blockedArticles.get(a.id)!))] : [],
       ...(w ? { why: { score: w.score, parts: w.parts as any, reasons: w.reasons, bucket: w.bucket } } : {}),
     };
