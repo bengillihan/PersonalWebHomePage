@@ -41,7 +41,7 @@ export default function Market({ version, onOpenSettings }: { version: number; o
               <div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{x.symbol}</span>{x.isDailyNav && <span className="text-[10px] uppercase tracking-wide text-slate-400">NAV</span>}</div>
               {x.last != null ? (<>
                 <div className="text-base font-semibold tabular-nums">{fmt(x.last)}</div>
-                {d && !x.isMoneyMarket ? <div className={`text-xs tabular-nums ${up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{up ? '▲' : '▼'} {fmt(Math.abs(d.change))} ({d.pct >= 0 ? '+' : ''}{d.pct.toFixed(2)}%)</div> : <div className="text-xs text-slate-400">{x.isMoneyMarket ? 'stable NAV' : '—'}</div>}
+                {d && !x.isMoneyMarket ? <div title={x.isDailyNav ? '1D: latest published NAV vs the previous published NAV' : '1D: latest daily close vs the previous daily close'} className={`text-xs tabular-nums ${up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{up ? '▲' : '▼'} {fmt(Math.abs(d.change))} ({d.pct >= 0 ? '+' : ''}{d.pct.toFixed(2)}%)</div> : <div className="text-xs text-slate-400">{x.isMoneyMarket ? 'stable NAV' : '—'}</div>}
               </>) : <div className="mt-1 text-xs text-slate-500" title={x.error ?? ''}>{x.errorKind === 'plan' ? 'Not on your plan' : x.errorKind === 'no_key' ? 'No data source' : x.error ? 'Unavailable' : 'Loading…'}</div>}
             </button>
           );
@@ -51,11 +51,11 @@ export default function Market({ version, onOpenSettings }: { version: number; o
         <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div><div className="font-semibold">{q.name}</div><div className="text-xs text-slate-500">{q.last != null ? `${q.isDailyNav ? 'Daily NAV' : 'Last close/price'} as of ${q.asOf}` : 'No data'}</div></div>
-            <div className="flex gap-1" role="tablist">{RANGES.map((r) => <button key={r} role="tab" aria-selected={range === r} className={`btn !py-1 text-xs ${range === r ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setRange(r)}>{r}</button>)}</div>
+            <div className="flex gap-1" role="tablist">{RANGES.map((r) => { const ok = q.ranges.find((x) => x.range === r)?.available !== false; return <button key={r} role="tab" aria-selected={range === r} title={ok ? undefined : 'Not enough history'} className={`btn !py-1 text-xs ${range === r ? 'btn-primary' : 'btn-ghost'} ${!ok && range !== r ? 'opacity-50' : ''}`} onClick={() => setRange(r)}>{r}</button>; })}</div>
           </div>
           {q.note && <p className="mt-1 text-xs text-slate-500">{q.note}</p>}
           {q.error && q.last == null ? <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">{q.error}. You can map this symbol to a different provider symbol in Settings → Watchlist.</p> : (
-            <Suspense fallback={<div className="skeleton mt-2 h-36 w-full" />}><Chart symbol={q.symbol} range={range} change={q.changes.find((c) => c.range === range)} /></Suspense>
+            <Suspense fallback={<div className="skeleton mt-2 h-36 w-full" />}><Chart symbol={q.symbol} range={range} /></Suspense>
           )}
         </div>
       )}

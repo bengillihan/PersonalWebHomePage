@@ -29,13 +29,15 @@ describe('market quote parsing', () => {
     expect(kind({ status: 'ok', values: [{ datetime: 'x', close: 'nan' }] })).toBe('bad_response');
   });
   it('maps instrument types', () => { expect(mapInstrumentType('Mutual Fund')).toBe('mutual_fund'); expect(mapInstrumentType('ETF')).toBe('etf'); expect(mapInstrumentType('Common Stock')).toBe('equity'); expect(mapInstrumentType('Index')).toBe('index'); expect(mapInstrumentType('Crypto')).toBeNull(); });
-  it('computes absolute/percent change for 1D, 1W, 1M, YTD, 1Y', () => {
-    const b = bars(330);
+  it('computes absolute/percent change per CALENDAR period, only where history covers it', () => {
+    const b = bars(400); // one bar per calendar day ending 2026-10-28, rising 1.00 per day
     const ch = Object.fromEntries(changesFromBars(b).map((c) => [c.range, c]));
-    expect(ch['1D'].change).toBe(1); expect(ch['1W'].change).toBe(5); expect(ch['1M'].change).toBe(21);
-    expect(ch['1D'].pct).toBeGreaterThan(0); expect(ch.YTD).toBeDefined(); expect(ch['1Y']).toBeDefined();
-    expect(changesFromBars(bars(30)).find((c) => c.range === '1Y')).toBeUndefined(); // no claim without a year of data
-    expect(sliceRange(b, '1M')).toHaveLength(22);
+    expect(ch['1D'].change).toBe(1); expect(ch['1W'].change).toBe(7); expect(ch['1M'].change).toBe(30); // 7 and 30 calendar days back, not 5 and 21 bars
+    expect(ch.YTD.change).toBe(301); expect(ch['1Y'].change).toBe(365); expect(ch['1D'].pct).toBeGreaterThan(0);
+    expect(changesFromBars(bars(330)).map((c) => c.range)).toEqual(['1D', '1W', '1M', 'YTD']); // 330 days is not a year: no 1Y return
+    expect(changesFromBars(bars(30)).map((c) => c.range)).toEqual(['1D', '1W']);
+    expect(sliceRange(b, '1M')).toHaveLength(31); // the chart spans exactly the month the return covers
+    expect(sliceRange(b, '1D')).toHaveLength(2);
   });
 });
 
@@ -81,7 +83,8 @@ describe('mutual fund NAV + market schedule behavior', () => {
     expect(quotes.VTWAX.isDailyNav).toBe(true); expect(quotes.VTWAX.note).toMatch(/not an intraday/);
     expect(quotes.VMFXX.isMoneyMarket).toBe(true); expect(quotes.VMFXX.note).toMatch(/Yield is a separate figure/);
     expect(quotes.SPX.last).toBeNull(); expect(quotes.SPX.errorKind).toBe('plan'); expect(quotes.SPX.error).toMatch(/plan/);
-    expect(quotes.VTWAX.changes.length).toBeGreaterThan(3);
+    expect(quotes.VTWAX.changes.map((c) => c.range)).toEqual(['1D', '1W', '1M']); // 260 days of history supports these; YTD and 1Y are honestly unavailable
+    expect(quotes.VTWAX.ranges.filter((r) => !r.available).map((r) => r.range)).toEqual(['YTD', '1Y']);
     const before = calls.length; await live.refreshIfNeeded(); expect(calls.length).toBe(before); // cached: no new calls
   });
 });

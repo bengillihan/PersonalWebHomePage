@@ -12,7 +12,9 @@ export interface Story {
 export interface FeedResponse { items: Story[]; nextCursor: string | null; status: Status; hasAnyStories: boolean; showImages: boolean; showRead: boolean }
 export interface Quote {
   symbol: string; name: string; type: 'equity' | 'etf' | 'mutual_fund' | 'index'; providerSymbol: string; last: number | null; asOf: string | null; fetchedAt: number | null;
-  isDailyNav: boolean; isMoneyMarket: boolean; changes: { range: string; change: number; pct: number }[]; error: string | null; errorKind: string | null; note: string | null;
+  isDailyNav: boolean; isMoneyMarket: boolean; changes: { range: string; change: number; pct: number }[];
+  ranges: { range: string; available: boolean; reason: string | null; fromDate: string | null; toDate: string | null; change: number | null; pct: number | null }[];
+  changeKind: 'price' | 'nav'; includesDistributions: false; error: string | null; errorKind: string | null; note: string | null;
 }
 export interface Source {
   id: number; name: string; siteUrl: string; feedUrl: string | null; kind: 'rss' | 'aggregator'; aggregatorLabel: string | null; priority: 'high' | 'normal' | 'low';

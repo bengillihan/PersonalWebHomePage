@@ -4,42 +4,89 @@ import { ProviderError, type Bar, type InstrumentType, type MarketProvider } fro
 
 export type Range = '1D' | '1W' | '1M' | 'YTD' | '1Y';
 export const RANGES: Range[] = ['1D', '1W', '1M', 'YTD', '1Y'];
-const HISTORY_DAYS = 260;
+/** Daily bars requested per refresh. One request per symbol regardless of length, so this costs no extra credits; ~275 sessions covers a full calendar year. */
+export const HISTORY_DAYS = 275;
 
+export type ChangeKind = 'price' | 'nav';
 export interface RangeChange { range: Range; change: number; pct: number }
+/** One period's return. Unavailable (with a reason) rather than approximated when history does not cover the period. */
+export interface PeriodResult { range: Range; available: boolean; reason: string | null; fromDate: string | null; toDate: string | null; change: number | null; pct: number | null }
 export interface QuoteDto {
   symbol: string; name: string; type: InstrumentType; providerSymbol: string;
   last: number | null; asOf: string | null; fetchedAt: number | null; isDailyNav: boolean; isMoneyMarket: boolean;
-  changes: RangeChange[]; error: string | null; errorKind: string | null;
+  changes: RangeChange[]; // only the periods that are actually available
+  ranges: PeriodResult[]; // every period, with availability
+  changeKind: ChangeKind; includesDistributions: false; // price/NAV change only: never a total return
+  error: string | null; errorKind: string | null;
   note: string | null;
 }
 
-export function changesFromBars(bars: Bar[]): RangeChange[] {
-  if (bars.length < 2) return [];
-  const last = bars[bars.length - 1];
-  const out: RangeChange[] = [];
-  const back = (n: number) => bars[Math.max(0, bars.length - 1 - n)];
-  const targets: [Range, Bar][] = [['1D', back(1)], ['1W', back(5)], ['1M', back(21)], ['1Y', bars[0]]];
-  const ytdBase = [...bars].reverse().find((b) => b.date < `${last.date.slice(0, 4)}-01-01`);
-  if (ytdBase) targets.splice(3, 0, ['YTD', ytdBase]);
-  for (const [range, base] of targets) {
-    if (base === last || !base.close) continue;
-    if (range === '1Y' && bars.length < 200) continue; // not enough history to claim a year
-    out.push({ range, change: last.close - base.close, pct: ((last.close - base.close) / base.close) * 100 });
-  }
-  return out;
+const NOT_ENOUGH = 'Not enough history';
+const MAX_BASE_GAP_DAYS = 7; // the base close may be at most a week before the calendar date it stands for (weekends, holidays, short data gaps)
+const ms = (d: string) => Date.parse(d + 'T00:00:00Z');
+const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+const daysBetween = (from: string, to: string) => Math.round((ms(to) - ms(from)) / 86_400_000);
+function monthsBack(date: string, months: number): string {
+  const [y, m, d] = date.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1 - months, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+  return iso(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), Math.min(d, last)));
 }
 
-export function sliceRange(bars: Bar[], range: Range): Bar[] {
-  if (!bars.length) return [];
-  const n = { '1D': 5, '1W': 6, '1M': 22, '1Y': HISTORY_DAYS, YTD: 0 }[range];
-  if (range === 'YTD') {
-    const year = bars[bars.length - 1].date.slice(0, 4);
-    const base = [...bars].reverse().find((b) => b.date < `${year}-01-01`);
-    return bars.filter((b) => b.date >= `${year}-01-01` || b === base);
-  }
-  return bars.slice(-n);
+/** The calendar date each period starts from (as of the latest observation). 1D is handled separately: it compares consecutive closes. */
+function targetDate(range: Exclude<Range, '1D'>, last: string): string {
+  if (range === '1W') return iso(ms(last) - 7 * 86_400_000);
+  if (range === '1M') return monthsBack(last, 1);
+  if (range === 'YTD') return `${Number(last.slice(0, 4)) - 1}-12-31`;
+  return monthsBack(last, 12);
 }
+
+/** Index of the bar a period starts from, or null if the history does not support it. Bars must be ascending trading-day observations. */
+function baseIndex(bars: Bar[], range: Range): number | null {
+  if (bars.length < 2) return null;
+  const lastIdx = bars.length - 1; const last = bars[lastIdx];
+  if (range === '1D') return daysBetween(bars[lastIdx - 1].date, last.date) <= MAX_BASE_GAP_DAYS ? lastIdx - 1 : null; // previous published close
+  const target = targetDate(range, last.date);
+  for (let i = lastIdx - 1; i >= 0; i--) { // the latest close ON OR BEFORE the target date: a weekend/holiday target uses the prior trading day
+    if (bars[i].date <= target) return daysBetween(bars[i].date, target) <= MAX_BASE_GAP_DAYS ? i : null;
+  }
+  return null; // history starts after the target date
+}
+
+/** Returns for every period, calendar-based and only where real history covers them. */
+export function periodReturns(bars: Bar[]): PeriodResult[] {
+  const none = (range: Range, reason: string): PeriodResult => ({ range, available: false, reason, fromDate: null, toDate: null, change: null, pct: null });
+  return RANGES.map((range) => {
+    const i = baseIndex(bars, range);
+    if (i === null) return none(range, NOT_ENOUGH);
+    const base = bars[i], last = bars[bars.length - 1];
+    if (!(base.close > 0) || !Number.isFinite(last.close)) return none(range, 'No valid base price');
+    return { range, available: true, reason: null, fromDate: base.date, toDate: last.date, change: last.close - base.close, pct: ((last.close - base.close) / base.close) * 100 };
+  });
+}
+
+/** Available periods only (kept for callers that just want numbers). */
+export function changesFromBars(bars: Bar[]): RangeChange[] {
+  return periodReturns(bars).filter((p) => p.available).map((p) => ({ range: p.range, change: p.change!, pct: p.pct! }));
+}
+
+/** The observations a period's chart shows: from its base close to the latest, i.e. exactly the span the return was calculated over. */
+export function sliceRange(bars: Bar[], range: Range): Bar[] {
+  const i = baseIndex(bars, range);
+  return i === null ? [] : bars.slice(i);
+}
+
+const DISCLAIMER = {
+  price: 'Price change only: excludes dividends and distributions; not total return.',
+  nav: 'NAV change only: excludes distributions that a total return would add back; not total return.',
+} as const;
+
+function basisText(range: Range, kind: ChangeKind, p: PeriodResult): string {
+  if (!p.available) return NOT_ENOUGH;
+  if (range === '1D') return kind === 'nav' ? 'Latest published NAV vs the previous published NAV (daily data; no intraday movement).' : 'Latest daily close vs the previous daily close (daily data only; no intraday data).';
+  return `${kind === 'nav' ? 'Published NAV' : 'Daily close'} on ${p.fromDate} vs ${p.toDate}.`;
+}
+
+export interface SeriesDto { symbol: string; range: Range; bars: Bar[]; available: boolean; reason: string | null; fromDate: string | null; toDate: string | null; change: number | null; pct: number | null; kind: ChangeKind; basis: string; disclaimer: string }
 
 export class MarketService {
   private inflight: Promise<void> | null = null;
@@ -63,16 +110,21 @@ export class MarketService {
       return {
         symbol: w.symbol, name: w.name, type: w.instrument_type, providerSymbol: w.provider_symbol || w.symbol,
         last: last?.close ?? null, asOf: last?.date ?? null, fetchedAt: c?.fetched_at ?? null, isDailyNav: isNav,
-        isMoneyMarket: isMM, changes: changesFromBars(bars), error: last ? (errorKind === 'no_key' ? error : null) : error, errorKind,
+        isMoneyMarket: isMM, changes: changesFromBars(bars), ranges: periodReturns(bars), changeKind: isNav ? 'nav' : 'price', includesDistributions: false,
+        error: last ? (errorKind === 'no_key' ? error : null) : error, errorKind,
         note: isMM ? 'Stable NAV (typically $1.00). Yield is a separate figure and is not shown here.' : isNav ? 'Daily published NAV, not an intraday quote.' : null,
       };
     });
   }
 
-  series(symbol: string, range: Range): { symbol: string; range: Range; bars: Bar[] } {
+  /** The chart for one period, from cached history only (no provider call). Spans exactly the period the return is calculated over. */
+  series(symbol: string, range: Range): SeriesDto {
     const c = this.db.prepare("SELECT series FROM market_prices WHERE symbol = ? AND range = 'daily'").get(symbol) as any;
+    const type = (this.db.prepare('SELECT instrument_type t FROM watchlist WHERE symbol = ?').get(symbol) as { t: string } | undefined)?.t;
+    const kind: ChangeKind = type === 'mutual_fund' ? 'nav' : 'price';
     const bars: Bar[] = c?.series ? JSON.parse(c.series) : [];
-    return { symbol, range, bars: sliceRange(bars, range) };
+    const p = periodReturns(bars).find((x) => x.range === range)!;
+    return { symbol, range, bars: sliceRange(bars, range), available: p.available, reason: p.reason, fromDate: p.fromDate, toDate: p.toDate, change: p.change, pct: p.pct, kind, basis: basisText(range, kind, p), disclaimer: DISCLAIMER[kind] };
   }
 
   /** Refreshes only instruments whose schedule says new data should exist. Serial, spaced to respect per-minute limits. */
