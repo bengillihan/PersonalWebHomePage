@@ -76,9 +76,12 @@ export interface SafeResponse { status: number; url: string; headers: http.Incom
 
 export async function safeFetch(input: string, opts: SafeFetchOptions = {}): Promise<SafeResponse> {
   const { timeoutMs = 10_000, maxBytes = 2_000_000, maxRedirects = 4 } = opts;
+  // timeoutMs is a hard deadline for the WHOLE call: DNS, connect, every redirect hop and the full body. A server that trickles bytes
+  // (which keeps an idle timeout alive forever) is cut off at the deadline, so one slow feed cannot hold a refresh open.
+  const deadlineAt = Date.now() + timeoutMs;
   let url = validateUrl(input, opts);
   for (let hop = 0; hop <= maxRedirects; hop++) {
-    const res = await once(url, opts, timeoutMs, maxBytes);
+    const res = await once(url, opts, deadlineAt, maxBytes);
     if ([301, 302, 303, 307, 308].includes(res.status) && res.headers.location) {
       if (hop === maxRedirects) throw new FetchError('Too many redirects', 'too_many_redirects');
       url = validateUrl(new URL(String(res.headers.location), url).toString(), opts);
@@ -89,8 +92,10 @@ export async function safeFetch(input: string, opts: SafeFetchOptions = {}): Pro
   throw new FetchError('Too many redirects', 'too_many_redirects');
 }
 
-function once(url: URL, opts: SafeFetchOptions, timeoutMs: number, maxBytes: number): Promise<SafeResponse> {
+function once(url: URL, opts: SafeFetchOptions, deadlineAt: number, maxBytes: number): Promise<SafeResponse> {
   return new Promise((resolve, reject) => {
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) return reject(new FetchError('Request exceeded its overall time limit', 'timeout'));
     const lib = url.protocol === 'https:' ? https : http;
     // The lookup validates the exact address the socket will connect to, which defeats DNS rebinding.
     const lookup: net.LookupFunction = (hostname, options, cb) => {
@@ -106,7 +111,7 @@ function once(url: URL, opts: SafeFetchOptions, timeoutMs: number, maxBytes: num
       });
     };
     let settled = false;
-    const fail = (e: unknown) => { if (!settled) { settled = true; reject(e instanceof FetchError ? e : new FetchError(String((e as Error)?.message ?? e), (e as any)?.code ?? 'network_error')); } };
+    const fail = (e: unknown) => { if (!settled) { settled = true; clearTimeout(deadline); reject(e instanceof FetchError ? e : new FetchError(String((e as Error)?.message ?? e), (e as any)?.code ?? 'network_error')); } };
     const req = lib.request(url, {
       method: 'GET', lookup,
       headers: { 'user-agent': USER_AGENT, accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.8, application/json;q=0.7, */*;q=0.5', 'accept-encoding': 'gzip, deflate', ...opts.headers },
@@ -122,13 +127,14 @@ function once(url: URL, opts: SafeFetchOptions, timeoutMs: number, maxBytes: num
         chunks.push(c);
       });
       stream.on('end', () => {
-        if (settled) return; settled = true;
+        if (settled) return; settled = true; clearTimeout(deadline);
         const body = Buffer.concat(chunks);
         resolve({ status: res.statusCode ?? 0, url: url.toString(), headers: res.headers, body, text: () => decode(body, String(res.headers['content-type'] ?? '')) });
       });
       stream.on('error', fail);
     });
-    req.setTimeout(timeoutMs, () => { req.destroy(); fail(new FetchError('Request timed out', 'timeout')); });
+    const deadline = setTimeout(() => { req.destroy(); fail(new FetchError('Request exceeded its overall time limit', 'timeout')); }, remaining);
+    req.setTimeout(remaining, () => { req.destroy(); fail(new FetchError('Request timed out', 'timeout')); }); // idle timeout, bounded by the same deadline
     req.on('error', fail);
     req.end();
   });
