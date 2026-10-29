@@ -242,17 +242,28 @@ export async function summarizeClusters(deps: IngestDeps, clusterIds: Iterable<n
   }
 }
 
+/**
+ * Retention. Stories that are bookmarked or carry feedback are kept whole; everything else ages out article by article. A story that loses SOME
+ * of its articles lives on, so it is recomputed in the same transaction as the deletion (primary article, title, counts, dates, content hash).
+ * An AI summary that was written from the deleted articles no longer matches the story's content hash and is replaced by a local summary from the
+ * remaining articles. Purely local: pruning never calls Gemini.
+ */
 export function pruneOldData(db: DB, now = Date.now()): { articles: number } {
   const cut = now - getPrefs(db).retentionDays * 86_400_000;
   // Keep any story that is bookmarked or carries feedback; everything else ages out.
   const keep = `(SELECT cluster_id FROM bookmarks UNION SELECT cluster_id FROM feedback)`;
-  const r = db.prepare(`DELETE FROM articles WHERE published_at < ? AND (cluster_id IS NULL OR cluster_id NOT IN ${keep})`).run(cut);
-  db.prepare('DELETE FROM story_clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM articles WHERE cluster_id IS NOT NULL)').run();
-  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
-  db.prepare('DELETE FROM processing_jobs WHERE started_at < ?').run(now - 30 * 86_400_000);
-  db.prepare('DELETE FROM ai_cache WHERE created_at < ?').run(now - 45 * 86_400_000);
-  db.pragma('wal_checkpoint(PASSIVE)');
-  return { articles: r.changes };
+  let removed = 0;
+  db.transaction(() => {
+    const affected = db.prepare(`SELECT DISTINCT cluster_id FROM articles WHERE published_at < ? AND cluster_id IS NOT NULL AND cluster_id NOT IN ${keep}`).all(cut) as { cluster_id: number }[];
+    removed = db.prepare(`DELETE FROM articles WHERE published_at < ? AND (cluster_id IS NULL OR cluster_id NOT IN ${keep})`).run(cut).changes;
+    for (const r of affected) recomputeCluster(db, r.cluster_id); // removes a story left with no articles; otherwise refreshes the survivor
+    db.prepare('DELETE FROM story_clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM articles WHERE cluster_id IS NOT NULL)').run();
+    db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+    db.prepare('DELETE FROM processing_jobs WHERE started_at < ?').run(now - 30 * 86_400_000);
+    db.prepare('DELETE FROM ai_cache WHERE created_at < ?').run(now - 45 * 86_400_000);
+  })();
+  db.pragma('wal_checkpoint(PASSIVE)'); // not allowed inside a transaction
+  return { articles: removed };
 }
 
 export type RefreshTrigger = 'stale' | 'manual' | 'cron';
