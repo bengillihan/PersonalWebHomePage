@@ -7,7 +7,7 @@ export interface Story {
   articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[] }[];
   why?: { score: number; parts: Record<string, number>; reasons: string[]; bucket: string };
 }
-export interface FeedResponse { items: Story[]; nextCursor: string | null; status: Status; hasAnyStories: boolean; showImages: boolean }
+export interface FeedResponse { items: Story[]; nextCursor: string | null; status: Status; hasAnyStories: boolean; showImages: boolean; showRead: boolean }
 export interface Quote {
   symbol: string; name: string; type: 'equity' | 'etf' | 'mutual_fund' | 'index'; providerSymbol: string; last: number | null; asOf: string | null; fetchedAt: number | null;
   isDailyNav: boolean; isMoneyMarket: boolean; changes: { range: string; change: number; pct: number }[]; error: string | null; errorKind: string | null; note: string | null;
@@ -21,7 +21,7 @@ export interface Topic { id: number; name: string; kind: 'category' | 'interest'
 export interface Prefs {
   weights: { interests: number; importance: number; recency: number; source: number; feedback: number };
   quotas: { personalized: number; major: number; local: number };
-  preferredPublishers: string[]; mutedPublishers: string[]; theme: 'light' | 'dark' | 'system'; showImages: boolean; retentionDays: number; staleMinutes: number;
+  preferredPublishers: string[]; mutedPublishers: string[]; theme: 'light' | 'dark' | 'system'; showRead: boolean; showImages: boolean; retentionDays: number; staleMinutes: number;
 }
 export interface WeatherLocation { label: string; lat: number; lon: number; zip: string | null }
 export interface WeatherDay { date: string; code: number; description: string; icon: string; highF: number; lowF: number; precipPct: number | null }

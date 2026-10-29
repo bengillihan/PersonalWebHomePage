@@ -45,7 +45,11 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   // Saved lists every bookmark regardless of age (pruneOldData also keeps bookmarked stories); all other tabs honor retention.
   if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(ELIGIBLE_SQL); } // Saved always shows every bookmark
   if (fq.tab !== 'saved') where.push('rs.hidden_at IS NULL');
-  if (fq.tab === 'unread') where.push('rs.read_at IS NULL');
+  if (fq.tab === 'unread') where.push('rs.read_at IS NULL'); // strictly unread
+  // Read stories are hidden from the main feeds unless 'Show read stories' is on. Never hidden in Saved, in Unread's own rule above, or in
+  // search (so previously viewed articles stay findable). Read is per story (cluster); a story reappears, marked Updated, when it gained
+  // substantial new information after being read (updated_at is bumped by new coverage, material corrections and merges, not by cosmetic edits).
+  if (!prefs.showRead && !['saved', 'unread'].includes(fq.tab) && !(fq.q ?? '').trim()) where.push('(rs.read_at IS NULL OR c.updated_at > rs.read_at)');
   if (fq.tab === 'saved') where.push('b.cluster_id IS NOT NULL');
   if (fq.tab === 'local') where.push(`(c.category = 'Local' OR EXISTS (SELECT 1 FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.cluster_id = c.id AND s.is_local = 1))`);
   if (fq.tab === 'topic' && fq.topic) {

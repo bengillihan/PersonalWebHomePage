@@ -10,6 +10,7 @@ export interface Prefs {
   retentionDays: number;
   staleMinutes: number;
   theme: 'light' | 'dark' | 'system';
+  showRead: boolean; // show already-read stories in the main feeds (dimmed); off by default
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -21,6 +22,7 @@ export const DEFAULT_PREFS: Prefs = {
   retentionDays: 90,
   staleMinutes: 60,
   theme: 'system',
+  showRead: false,
 };
 
 export function getPrefs(db: DB): Prefs {

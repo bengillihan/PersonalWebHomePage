@@ -59,7 +59,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     if (!q.cursor) { refresher.maybeRefresh(); void market.refreshIfNeeded().catch(() => {}); }
     const page = queryFeed(db, q);
     const total = (db.prepare('SELECT COUNT(*) n FROM story_clusters').get() as any).n;
-    return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages };
+    return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: getPrefs(db).showRead };
   });
   app.post('/api/refresh', heavy, async (_req, reply) => { void refresher.trigger('manual').catch(() => {}); void market.refreshIfNeeded(true).catch(() => {}); return reply.code(202).send(status()); });
 
@@ -198,10 +198,10 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     weights: z.object({ interests: z.number().min(0).max(1), importance: z.number().min(0).max(1), recency: z.number().min(0).max(1), source: z.number().min(0).max(1), feedback: z.number().min(0).max(1) }),
     quotas: z.object({ personalized: z.number().min(0).max(1), major: z.number().min(0).max(1), local: z.number().min(0).max(1) }),
     preferredPublishers: z.array(z.string().max(80)).max(50), mutedPublishers: z.array(z.string().max(80)).max(50),
-    theme: z.enum(['light', 'dark', 'system']).optional(), showImages: z.boolean(), retentionDays: z.number().int().min(7).max(365), staleMinutes: z.number().int().min(15).max(1440),
+    theme: z.enum(['light', 'dark', 'system']).optional(), showRead: z.boolean().optional(), showImages: z.boolean(), retentionDays: z.number().int().min(7).max(365), staleMinutes: z.number().int().min(15).max(1440),
   });
   app.get('/api/prefs', async () => ({ prefs: getPrefs(db), publishers: (db.prepare('SELECT DISTINCT publisher FROM articles ORDER BY publisher').all() as any[]).map((r) => r.publisher) }));
-  app.put('/api/prefs', async (req) => { const p = prefsSchema.parse(req.body); savePrefs(db, { ...p, theme: p.theme ?? getPrefs(db).theme }); return { ok: true }; });
+  app.put('/api/prefs', async (req) => { const p = prefsSchema.parse(req.body); const cur = getPrefs(db); savePrefs(db, { ...p, theme: p.theme ?? cur.theme, showRead: p.showRead ?? cur.showRead }); return { ok: true }; }); // fields an older client omits are kept
   // Light/dark choice is stored server-side so it follows you across devices and survives deploys. No write if unchanged.
   app.put('/api/theme', async (req) => { const { theme } = z.object({ theme: z.enum(['light', 'dark', 'system']) }).parse(req.body); const cur = getPrefs(db); if (cur.theme !== theme) savePrefs(db, { ...cur, theme }); return { theme }; });
   app.put('/api/ai/budget', async (req) => { const { budget } = z.object({ budget: z.number().int().min(0).max(100000) }).parse(req.body); setSetting(db, 'ai_daily_budget', budget); return { ok: true }; });

@@ -11,7 +11,7 @@ const DOWN = 'M17 14V3h4v11h-4zm0 0l-4 8a2 2 0 01-2-2v-4H5a2 2 0 01-2-2.3l1.3-8A
 const MARK = 'M6 3h12a1 1 0 011 1v17l-7-4-7 4V4a1 1 0 011-1z';
 const EYE_OFF = 'M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A9.8 9.8 0 0112 5c5 0 9 4 10 7a11 11 0 01-3.2 4.4M6.2 6.3A11 11 0 002 12c1 3 5 7 10 7a9.7 9.7 0 004-.9';
 
-export default function StoryCard({ story, showImages, onChange, onGone }: { story: Story; showImages: boolean; onChange: (s: Story) => void; onGone: (id: number) => void }) {
+export default function StoryCard({ story, showImages, onChange, onGone, onRead }: { story: Story; showImages: boolean; onChange: (s: Story) => void; onGone: (id: number) => void; onRead?: (s: Story, read: boolean, via: 'button' | 'link') => void }) {
   const [open, setOpen] = useState(false);
   const [why, setWhy] = useState(false);
   const [askReason, setAskReason] = useState(false);
@@ -24,6 +24,9 @@ export default function StoryCard({ story, showImages, onChange, onGone }: { sto
   const p = story.primary;
 
   const rate = (rating: 1 | -1 | 0, reason?: string) => run(() => api(`/api/stories/${story.id}/feedback`, { method: 'POST', body: { rating, reason: reason ?? null } }), { rating });
+  // A story that gained new information after it was read counts as unread again (it carries the Updated label).
+  const effectivelyRead = story.isRead && !story.isUpdated;
+  const setRead = (r: boolean, via: 'button' | 'link') => (onRead ? onRead(story, r, via) : read(r));
   const read = (r: boolean) => run(() => api(`/api/stories/${story.id}/read`, { method: 'POST', body: { read: r } }), { isRead: r, isUpdated: false });
   const toggleWhy = async () => {
     setWhy(!why);
@@ -33,7 +36,7 @@ export default function StoryCard({ story, showImages, onChange, onGone }: { sto
   const btn = (active: boolean) => `btn btn-ghost !px-2 ${active ? '!text-indigo-600 dark:!text-indigo-400' : ''}`;
 
   return (
-    <article className={`card p-4 transition sm:p-5 ${story.isRead ? 'opacity-60 hover:opacity-100' : ''}`} aria-label={story.title}>
+    <article className={`card p-4 transition sm:p-5 ${effectivelyRead ? 'opacity-60 hover:opacity-100' : ''}`} aria-label={story.title}>
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -46,7 +49,7 @@ export default function StoryCard({ story, showImages, onChange, onGone }: { sto
             {p?.aggregated && <span className="chip" title="Found via a Google News aggregator feed; the link opens through Google News">via aggregator</span>}
           </div>
           <h2 className="text-lg font-semibold leading-snug sm:text-xl">
-            {p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={() => !story.isRead && read(true)} className="hover:text-indigo-600 hover:underline dark:hover:text-indigo-400">{story.title}</a> : story.title}
+            {p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={() => !effectivelyRead && setRead(true, 'link')} className="hover:text-indigo-600 hover:underline dark:hover:text-indigo-400">{story.title}</a> : story.title}
           </h2>
           {story.summary ? (
             <p className="mt-2 text-[0.97rem] leading-relaxed text-slate-700 dark:text-slate-300">
@@ -69,7 +72,7 @@ export default function StoryCard({ story, showImages, onChange, onGone }: { sto
         <button className={btn(story.rating === -1)} aria-pressed={story.rating === -1} aria-label="Thumbs down" title="Less like this" onClick={() => (story.rating === -1 ? rate(0) : (setAskReason(true), rate(-1)))}><Icon d={DOWN} fill={story.rating === -1} /></button>
         <button className={btn(story.bookmarked)} aria-pressed={story.bookmarked} aria-label="Bookmark" title="Save" onClick={() => run(() => api(`/api/stories/${story.id}/bookmark`, { method: 'POST', body: { on: !story.bookmarked } }), { bookmarked: !story.bookmarked })}><Icon d={MARK} fill={story.bookmarked} /></button>
         <button className="btn btn-ghost !px-2" aria-label="Hide story" title="Hide" onClick={() => run(() => api(`/api/stories/${story.id}/hide`, { method: 'POST', body: { hidden: true } }), {}).then(() => onGone(story.id))}><Icon d={EYE_OFF} /></button>
-        <button className="btn btn-ghost text-xs" onClick={() => read(!story.isRead)}>{story.isRead ? 'Mark unread' : 'Mark read'}</button>
+        <button className="btn btn-ghost text-xs" onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
         <span className="flex-1" />
         <button className="btn btn-ghost text-xs" onClick={toggleWhy} aria-expanded={why}>Why am I seeing this?</button>
         {story.sourceCount > 1 && <button className="btn btn-outline text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : `See coverage from ${story.sourceCount} sources`}</button>}

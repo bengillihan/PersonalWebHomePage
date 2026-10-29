@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { memDb, testConfig, rss, hoursAgo } from './helpers.js';
 import { buildApp } from '../server/app.js';
 import { seedDefaults } from '../server/seed.js';
+import { getPrefs, savePrefs } from '../server/settings.js';
 import type { OidcClient, OidcIdentity } from '../server/auth.js';
 
 let app: FastifyInstance; let db: ReturnType<typeof memDb>;
@@ -148,6 +149,8 @@ describe('API validation & behavior', () => {
     expect((await feed('unread')).items).toHaveLength(1);
     await call('POST', '/api/stories/1/read', { read: true });
     expect((await feed('unread')).items).toHaveLength(0);
+    expect((await feed('latest')).items).toHaveLength(0); // read stories are hidden from the main feeds by default
+    savePrefs(db, { ...getPrefs(db), showRead: true }); // ...and shown (dimmed) when the preference is on
     expect((await feed('latest')).items[0].isRead).toBe(true);
     await call('POST', '/api/stories/1/bookmark', { on: true });
     expect((await feed('saved')).items).toHaveLength(1);
