@@ -7,6 +7,7 @@ import { Ai, type AiTransport } from '../server/ai/gemini.js';
 import { savePrefs, getPrefs } from '../server/settings.js';
 import type { DB } from '../server/db.js';
 
+// (Articles carry no excerpt here so the premise below is about HEADLINE scores; excerpt-aware scoring is covered in clustering-quality.test.ts.)
 // Three headlines about one game. A~B and B~C score in the "uncertain" band (0.367, 0.507) while A~C does not (0.230), so a model is
 // asked about (B, A) and (C, B). If it says "same event" to both, the second move must follow B to where B lives NOW.
 const A = 'Seahawks beat 49ers in overtime thriller at Lumen Field';
@@ -19,7 +20,7 @@ const source = (name = 'ESPN') => Number(db.prepare('INSERT INTO sources (name, 
 function article(src: number, title: string, o: { ageH?: number; locked?: boolean } = {}) {
   n++; const at = Date.now() - (o.ageH ?? 2) * HOUR;
   const id = Number(db.prepare(`INSERT INTO articles (source_id,url,canonical_url,canonical_hash,publisher,title,title_norm,excerpt,published_at,fetched_at,content_hash,availability,summary,summary_kind,cluster_locked)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,'excerpt',?,?,?)`).run(src, `https://e.example/${n}`, `https://e.example/${n}`, `h${n}`, `Pub${src}`, title, title.toLowerCase(), `${title}. More detail follows in this excerpt of the story.`, at, at, `c${n}`, `${title}. More detail follows in this excerpt.`, 'excerpt', o.locked ? 1 : 0).lastInsertRowid);
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,'excerpt',?,?,?)`).run(src, `https://e.example/${n}`, `https://e.example/${n}`, `h${n}`, `Pub${src}`, title, title.toLowerCase(), null, at, at, `c${n}`, `${title}. More detail follows in this excerpt.`, 'excerpt', o.locked ? 1 : 0).lastInsertRowid);
   db.prepare('INSERT INTO article_sources VALUES (?,?,?)').run(id, src, at); return id;
 }
 const sameEvent: Ai = { canCall: () => true, enabled: true, verifyPairs: async (pairs: any[]) => new Map(pairs.map((p) => [p.id, true])) } as unknown as Ai;

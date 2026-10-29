@@ -8,6 +8,10 @@ export const UNCERTAIN_THRESHOLD = 0.36;
 const WINDOW_MS = 48 * 3600_000;
 
 export interface Headline { title: string; publishedAt: number }
+export interface ArticleText { title: string; excerpt?: string | null }
+/** How many viable candidate stories one incoming article is weighed against (the strongest may be ruled out by a contradiction or a chain). */
+export const MAX_CANDIDATES = 3;
+const MIN_EXCERPT = 40, EXCERPT_CHARS = 400, EXCERPT_DISAGREE = 0.2;
 
 /** Local similarity of two headlines in [0,1]. Penalises conflicting figures so separate developments stay separate. */
 export function headlineSimilarity(a: string, b: string): number {
@@ -21,6 +25,84 @@ export function headlineSimilarity(a: string, b: string): number {
   const numsA = [...ea].filter((x) => /^\d/.test(x)), numsB = [...eb].filter((x) => /^\d/.test(x));
   if (numsA.length && numsB.length && !numsA.some((n) => numsB.includes(n))) score -= 0.15;
   return Math.max(0, score);
+}
+
+// Aliases and action words are canonicalised for SIMILARITY only (contradicts() still reads the raw headline). Case-sensitive acronyms first.
+const ACRONYMS: [RegExp, string][] = [[/\bU\.?S\.?(?=\s|$|[,:;])/g, 'United States'], [/\bUK\b/g, 'United Kingdom'], [/\bEU\b/g, 'European Union'], [/\bGOP\b/g, 'Republican'],
+  [/\bDOJ\b/g, 'Justice Department'], [/\bSEC\b/g, 'Securities Exchange Commission'], [/\bFAA\b/g, 'Federal Aviation Administration'], [/\bFed\b/g, 'Federal Reserve'],
+  [/\bFOMC\b/g, 'Federal Reserve'], [/\bWash\./g, 'Washington'], [/\bQ([1-4])\b/g, 'quarter$1'], [/\b(first|1st) quarter\b/gi, 'quarter1'], [/\b(second|2nd) quarter\b/gi, 'quarter2'],
+  [/\b(third|3rd) quarter\b/gi, 'quarter3'], [/\b(fourth|4th) quarter\b/gi, 'quarter4']];
+const ACTION_WORDS: [string, RegExp][] = [
+  ['launch', /\b(unveil|debut|launch)(s|ed|ing)?\b/i], ['earnings', /\b(earnings|quarterly results|profit|revenue|eps)\b/i], ['acquire', /\b(acquir(e|es|ed|ing)|acquisition|takeover|buys?|bought|purchase[sd]?)\b/i],
+  ['approve', /\bapprov(e|es|ed|al)\b/i], ['layoff', /\b(layoffs?|lays? off|laid off|job cuts)\b/i], ['recall', /\brecall(s|ed)?\b/i], ['lawsuit', /\b(lawsuit|sues|sued|suing)\b/i],
+  ['resign', /\b(resign(s|ed|ation)?|steps? down|stepped down)\b/i], ['rates', /\b(interest rates?|rate (cut|hike|decision))\b/i], ['stock', /\b(shares|stocks?)\b/i]];
+/** "Snohomish County" vs "King County": the same sentence about different places is a different event. */
+const placeNames = (title: string) => new Set([...title.matchAll(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) (?:County|City)\b/g)].map((m) => m[1].toLowerCase()));
+const ALIAS_ACTION: [RegExp, string][] = [[/\b(unveil|debut|launch)(s|ed|ing)?\b/gi, 'launch'], [/\bapprov(e|es|ed|al)\b/gi, 'approve'], [/\b(acquir(e|es|ed|ing)|acquisition|takeover|purchase[sd]?)\b/gi, 'acquire']];
+/** Text a feed appends to every excerpt; shared by unrelated stories, so it must not count as agreement. */
+const FEED_BOILERPLATE = /\b(the post .{0,200}? appeared first on .{0,80}|appeared first on .{0,80}|continue reading|read (the )?(full|more)( story| article)?|click here|sign up for .{0,60}newsletter)\b\.?/gi;
+/** Words that appear in almost every news story: they say little about WHICH event this is. */
+const COMMON = new Set('report reports say state city official officials announce plan plans week year company group people house public court new latest update news today first major big top set time'.split(' '));
+
+/** Rewrites acronyms and aliases to one canonical form ("Fed" and "Federal Reserve" become the same words). */
+export function canonicalText(text: string): string {
+  let t = text; for (const [re, to] of ACRONYMS) t = t.replace(re, to); for (const [re, to] of ALIAS_ACTION) t = t.replace(re, to); return t;
+}
+/** The kinds of development a headline describes ('earnings', 'launch', ...). Two headlines naming different ones are different developments. */
+export function eventActions(title: string): Set<string> { return new Set(ACTION_WORDS.filter(([, re]) => re.test(title)).map(([k]) => k)); }
+
+/** Distinctive terms count more than common news vocabulary; headline terms count double against excerpt terms. */
+function evidence(a: ArticleText): Map<string, number> {
+  const out = new Map<string, number>();
+  const add = (text: string, factor: number) => {
+    const canon = canonicalText(text);
+    for (const t of tokens(canon)) out.set(t, Math.max(out.get(t) ?? 0, factor * (COMMON.has(t) ? 0.4 : 1)));
+    for (const e of entities(canon)) out.set(e, Math.max(out.get(e) ?? 0, factor * 1.5));
+  };
+  add(a.title, 2); if (usableExcerpt(a)) add(a.excerpt!.replace(FEED_BOILERPLATE, ' ').slice(0, EXCERPT_CHARS), 1);
+  return out;
+}
+const usableExcerpt = (a: ArticleText) => typeof a.excerpt === 'string' && a.excerpt.trim().length >= MIN_EXCERPT;
+/** Dice overlap of weighted terms: unlike Jaccard it is not diluted by the extra sentences one publisher's excerpt happens to carry. */
+function weightedOverlap(a: Map<string, number>, b: Map<string, number>): number {
+  let inter = 0, total = 0;
+  for (const [k, x] of a) { inter += Math.min(x, b.get(k) ?? 0); total += x; }
+  for (const x of b.values()) total += x;
+  return total ? (2 * inter) / total : 0;
+}
+const figures = (text: string) => new Set(text.match(/\d[\d,.]*/g)?.map((x) => x.replace(/[,.]+$/, '')) ?? []);
+
+/**
+ * Local similarity of two articles' EVENT, in [0,1]: the headline score (with aliases normalised), which a matching excerpt can raise but never lower.
+ * An excerpt only helps when the headlines already share something (otherwise two stories on a common theme would join); headlines describing
+ * different kinds of development (earnings vs. a product launch) are held below the merge threshold so they are never grouped without a second opinion.
+ */
+export function articleSimilarity(a: ArticleText, b: ArticleText): number {
+  const ca = canonicalText(a.title), cb = canonicalText(b.title);
+  const h = headlineSimilarity(ca, cb);
+  let score = h;
+  if (usableExcerpt(a) && usableExcerpt(b)) {
+    const e = weightedOverlap(evidence(a), evidence(b));
+    if (h >= 0.12) score = Math.max(h, 0.55 * h + 0.45 * e);
+    const fa = figures(`${a.title} ${a.excerpt}`), fb = figures(`${b.title} ${b.excerpt}`);
+    const figuresDisagree = fa.size > 0 && fb.size > 0 && ![...fa].some((x) => fb.has(x)); // different vote counts, amounts, dates
+    if (e < EXCERPT_DISAGREE || figuresDisagree) score = Math.min(score, MERGE_THRESHOLD - 0.01); // similar headline, different details: a different development
+  }
+  const pa = placeNames(a.title), pb = placeNames(b.title);
+  if (pa.size && pb.size && ![...pa].some((x) => pb.has(x))) score = Math.min(score, MERGE_THRESHOLD - 0.01);
+  const xa = eventActions(a.title), xb = eventActions(b.title);
+  if (xa.size && xb.size && ![...xa].some((x) => xb.has(x))) score = Math.min(score, MERGE_THRESHOLD - 0.01);
+  return score;
+}
+
+/**
+ * An article joins a story only if it fits the story as a whole, not just one member: a strict majority of members must be similar to it (so A~B and
+ * B~C cannot chain A and C together), unless it is a near-duplicate of a member. Single-article stories need no extra check.
+ */
+export function fitsStory(art: ArticleText, members: ArticleText[], bestScore: number): boolean {
+  if (members.length < 2 || bestScore >= 0.8) return true;
+  const close = members.filter((m) => articleSimilarity(art, m) >= UNCERTAIN_THRESHOLD).length;
+  return close > members.length / 2;
 }
 
 export function createSingleton(db: DB, articleId: number): number {
@@ -138,8 +220,9 @@ function storyContradicts(db: DB, clusterId: number, title: string): boolean {
 export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[], maxAiPairs = 20): Promise<Set<number>> {
   const touched = new Set<number>();
   const uncertain: { id: number; articleId: number; otherArticleId: number; hashA: string; hashB: string; a: any; b: any }[] = [];
-  const getArt = db.prepare('SELECT id, title, publisher, published_at, content_hash FROM articles WHERE id = ?');
-  const cands = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.content_hash, a.cluster_id FROM articles a
+  const getArt = db.prepare('SELECT id, title, excerpt, publisher, published_at, content_hash FROM articles WHERE id = ?');
+  const storyMembers = db.prepare('SELECT title, excerpt FROM articles WHERE cluster_id = ?');
+  const cands = db.prepare(`SELECT a.id, a.title, a.excerpt, a.publisher, a.published_at, a.content_hash, a.cluster_id FROM articles a
     WHERE a.cluster_id IS NOT NULL AND a.id != ? AND a.published_at BETWEEN ? AND ?`);
   let pairId = 0;
   db.transaction(() => {
@@ -148,21 +231,29 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
       if (!art) continue;
       const existing = (db.prepare('SELECT cluster_id, cluster_locked FROM articles WHERE id = ?').get(id) as any);
       if (existing.cluster_id) { touched.add(existing.cluster_id); continue; }
-      let best = { score: 0, clusterId: 0, other: null as any };
+      // Best member per candidate story, strongest first. Stories ruled out by a contradiction are skipped, so a valid runner-up is still considered.
+      const perStory = new Map<number, { score: number; clusterId: number; other: any }>();
       for (const c of cands.all(id, art.published_at - WINDOW_MS, art.published_at + WINDOW_MS) as any[]) {
-        const s = headlineSimilarity(art.title, c.title);
-        if (s >= UNCERTAIN_THRESHOLD && contradicts(art.title, c.title)) continue; // similar wording, opposite claim: never a candidate, local or AI
-        if (s > best.score) best = { score: s, clusterId: c.cluster_id, other: c };
+        const s = articleSimilarity(art, c);
+        if (s < UNCERTAIN_THRESHOLD || contradicts(art.title, c.title)) continue; // similar wording, opposite claim: never a candidate, local or AI
+        if (s > (perStory.get(c.cluster_id)?.score ?? 0)) perStory.set(c.cluster_id, { score: s, clusterId: c.cluster_id, other: c });
       }
-      // One article of that story may contradict even though the closest one does not: check the whole story.
-      if (best.score >= UNCERTAIN_THRESHOLD && storyContradicts(db, best.clusterId, art.title)) best = { score: 0, clusterId: 0, other: null };
-      if (best.score >= MERGE_THRESHOLD) {
-        moveArticle(db, id, best.clusterId); touched.add(best.clusterId);
-        recomputeCluster(db, best.clusterId, true);
+      let target: number | null = null, fallback: { score: number; other: any } | null = null, weighed = 0;
+      for (const cand of [...perStory.values()].sort((x, y) => y.score - x.score)) {
+        if (weighed >= MAX_CANDIDATES) break;
+        if (storyContradicts(db, cand.clusterId, art.title)) continue; // one article of that story may contradict even though the closest one does not
+        weighed++;
+        const members = storyMembers.all(cand.clusterId) as ArticleText[];
+        if (cand.score >= MERGE_THRESHOLD && fitsStory(art, members, cand.score)) { target = cand.clusterId; break; }
+        fallback ??= cand; // viable but not clear-cut (borderline, or fits only part of the story): the model may decide
+      }
+      if (target !== null) {
+        moveArticle(db, id, target); touched.add(target);
+        recomputeCluster(db, target, true);
       } else {
         const cid = createSingleton(db, id); touched.add(cid);
-        if (best.score >= UNCERTAIN_THRESHOLD && ai?.canCall() && uncertain.length < maxAiPairs) {
-          uncertain.push({ id: ++pairId, articleId: id, otherArticleId: best.other.id, hashA: art.content_hash, hashB: best.other.content_hash, a: art, b: best.other });
+        if (fallback && ai?.canCall() && uncertain.length < maxAiPairs) {
+          uncertain.push({ id: ++pairId, articleId: id, otherArticleId: fallback.other.id, hashA: art.content_hash, hashB: fallback.other.content_hash, a: art, b: fallback.other });
         }
       }
     }
