@@ -1,0 +1,50 @@
+{
+  "name": "personal-news-market-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"tsx watch --env-file-if-exists=.env server/index.ts\" \"vite\"",
+    "build": "vite build && tsc -p tsconfig.server.json",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build",
+    "backup": "tsx --env-file-if-exists=.env scripts/backup.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/helmet": "^13.2.0",
+    "@fastify/rate-limit": "^11.2.1",
+    "@fastify/static": "^10.1.8",
+    "@google/genai": "^2.32.0",
+    "better-sqlite3": "^13.0.3",
+    "fast-xml-parser": "^5.11.2",
+    "fastify": "^5.12.7",
+    "google-auth-library": "^11.3.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.13.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5",
+    "vitest": "^4.1.11"
+  }
+}

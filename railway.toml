@@ -1,0 +1,12 @@
+# Minimal config-as-code. Enable "Serverless" (App Sleeping) in the Railway service settings UI.
+# Attach ONE volume mounted at /data and keep a single replica (SQLite).
+[build]
+builder = "RAILPACK"
+buildCommand = "npm run build"
+
+[deploy]
+startCommand = "npm start"
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

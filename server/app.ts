@@ -1,0 +1,62 @@
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import Fastify, { type FastifyInstance } from 'fastify';
+import cookie from '@fastify/cookie';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
+import { ZodError } from 'zod';
+import type { Config } from './config.js';
+import type { DB } from './db.js';
+import { Ai, createGeminiTransport, type AiTransport } from './ai/gemini.js';
+import { Refresher } from './news/ingest.js';
+import { MarketService } from './market/service.js';
+import { createTwelveData, type MarketProvider } from './market/provider.js';
+import { registerAuth, createGoogleOidc, type OidcClient } from './auth.js';
+import { registerApi } from './routes/api.js';
+import { FetchError } from './net/safeFetch.js';
+
+export interface AppOverrides { oidc?: OidcClient | null; transport?: AiTransport | null; provider?: MarketProvider; fetchOpts?: { allowPrivate?: boolean }; logger?: boolean }
+export interface Built { app: FastifyInstance; refresher: Refresher; ai: Ai; market: MarketService }
+
+export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promise<Built> {
+  const app = Fastify({
+    logger: o.logger === false ? false : { level: cfg.isProd ? 'info' : 'debug', redact: ['req.headers.cookie', 'req.headers.authorization', 'req.headers["x-csrf-token"]'] },
+    trustProxy: true, // Railway terminates TLS in front of the app
+    bodyLimit: 256 * 1024,
+  });
+  await app.register(cookie, { secret: cfg.sessionSecret || 'insecure-test-secret' });
+  await app.register(helmet, { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], imgSrc: ["'self'", 'https:', 'data:'], styleSrc: ["'self'", "'unsafe-inline'"], scriptSrc: ["'self'"], connectSrc: ["'self'"], frameAncestors: ["'none'"], formAction: ["'self'", 'https://accounts.google.com'] } }, referrerPolicy: { policy: 'no-referrer' } });
+  await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
+
+  const transport = o.transport !== undefined ? o.transport : cfg.geminiApiKey ? createGeminiTransport(cfg.geminiApiKey, cfg.geminiModel) : null;
+  const ai = new Ai(db, cfg.geminiModel, transport, cfg.aiDailyBudget);
+  const provider = o.provider ?? createTwelveData(cfg.twelveDataKey);
+  const market = new MarketService(db, provider);
+  const refresher = new Refresher({ db, ai, log: app.log as any, fetchOpts: o.fetchOpts });
+  const oidc = o.oidc !== undefined ? o.oidc : cfg.googleClientId && cfg.googleClientSecret ? createGoogleOidc(cfg) : null;
+
+  registerAuth(app, cfg, db, oidc);
+  registerApi(app, { cfg, db, ai, refresher, market, provider, fetchOpts: o.fetchOpts });
+
+  app.get('/health', { config: { rateLimit: false } }, async () => ({ ok: true }));
+
+  app.setErrorHandler((err: any, req, reply) => {
+    if (err instanceof ZodError) return reply.code(400).send({ error: 'invalid_input', issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })) });
+    if (err instanceof FetchError) return reply.code(err.code === 'not_found' ? 404 : 422).send({ error: err.code, message: err.message });
+    if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: err.code ?? 'error', message: err.message });
+    req.log.error({ err: { message: err.message, stack: cfg.isProd ? undefined : err.stack }, url: req.url }, 'unhandled error');
+    return reply.code(500).send({ error: 'internal_error' });
+  });
+
+  const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
+  if (fs.existsSync(webDir)) {
+    await app.register(fastifyStatic, { root: webDir, wildcard: false, setHeaders: (res, p) => { res.header('cache-control', p.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache'); } });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api/') || req.url.startsWith('/auth/')) return reply.code(404).send({ error: 'not_found' });
+      return reply.header('cache-control', 'no-cache').sendFile('index.html');
+    });
+  }
+  return { app, refresher, ai, market };
+}
