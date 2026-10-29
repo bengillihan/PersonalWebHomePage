@@ -73,6 +73,11 @@ function applyCorrection(db: DB, ex: ExistingArticle, item: FeedItem, contentHas
   return material;
 }
 
+/** A source's configured categories, passed to Gemini only as weak hints. */
+function sectionHints(json: string | null): string[] {
+  try { const l = JSON.parse(json ?? '[]'); return Array.isArray(l) ? l.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, 5) : []; } catch { return []; }
+}
+
 /** Fetches one source, updates its health, inserts new/changed articles. Returns ids of articles needing processing. */
 export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.now()): Promise<number[]> {
   const { db } = deps;
@@ -121,8 +126,9 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
           if (existing.source_id === s.id && existing.content_hash !== contentHash && applyCorrection(db, existing, item, contentHash)) ids.push(existing.id); // only material changes need AI
           continue;
         }
-        // Heuristic until Gemini scores it: feeds list top stories first, so early items from general (non-local) sources count as major.
-        const importance = !s.is_local && s.coverage === 'comprehensive' ? (position < 8 ? 0.62 : position < 20 ? 0.45 : 0.3) : 0.3;
+        // Heuristic until Gemini scores it: feeds list top stories first, so early items from non-local sources count as major.
+        // A feed's coverage setting is deliberately NOT part of this: interest-only is an eligibility filter (see query.ts), not a score.
+        const importance = !s.is_local ? (position < 8 ? 0.62 : position < 20 ? 0.45 : 0.3) : 0.3;
         position++;
         const r = insert.run({
           source_id: s.id, guid: item.guid, url: item.url, canonical_url: canonical, canonical_hash: hash, publisher: item.publisher ?? s.name,
@@ -158,9 +164,9 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
   // 2. AI classification/summaries for anything not yet analysed at its current content hash.
   let aiCount = 0;
   if (ai?.canCall()) {
-    const pending = db.prepare(`SELECT id, publisher, title, excerpt, published_at, content_hash FROM articles
-      WHERE (ai_content_hash IS NULL OR ai_content_hash != content_hash) AND published_at >= ? ORDER BY published_at DESC LIMIT 60`).all(Date.now() - 14 * 86_400_000) as any[];
-    const inputs: ArticleInput[] = pending.map((p) => ({ id: p.id, publisher: p.publisher, title: p.title, excerpt: p.excerpt, publishedAt: p.published_at, contentHash: p.content_hash }));
+    const pending = db.prepare(`SELECT a.id, a.publisher, a.title, a.excerpt, a.published_at, a.content_hash, s.categories AS src_categories FROM articles a JOIN sources s ON s.id = a.source_id
+      WHERE (a.ai_content_hash IS NULL OR a.ai_content_hash != a.content_hash) AND a.published_at >= ? ORDER BY a.published_at DESC LIMIT 60`).all(Date.now() - 14 * 86_400_000) as any[];
+    const inputs: ArticleInput[] = pending.map((p) => ({ id: p.id, publisher: p.publisher, title: p.title, excerpt: p.excerpt, publishedAt: p.published_at, contentHash: p.content_hash, sourceHints: sectionHints(p.src_categories) }));
     const cats = [...new Set([...BASE_CATEGORIES, ...loadTopics(db).filter((t) => t.kind === 'category').map((t) => t.name)])];
     const result = await ai.analyzeArticles(inputs, cats);
     const setAi = db.prepare(`UPDATE articles SET ai_category=?, importance=?, ai_content_hash=content_hash, summary=COALESCE(?, summary), summary_kind=CASE WHEN ? IS NOT NULL THEN 'ai' ELSE summary_kind END WHERE id=?`);

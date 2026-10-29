@@ -1,6 +1,7 @@
 import { loadConfig, validateConfig } from './config.js';
 import { openDb } from './db.js';
 import { seedDefaults } from './seed.js';
+import { ensureTopicIndex } from './news/topics.js';
 import { buildApp } from './app.js';
 
 const cfg = loadConfig();
@@ -13,6 +14,7 @@ if (problems.length) {
 
 const db = openDb(cfg.sqlitePath);
 seedDefaults(db);
+ensureTopicIndex(db);
 const { app } = await buildApp(cfg, db, { oidc: problems.length && !cfg.devLogin ? null : undefined });
 
 let closing = false;

@@ -13,7 +13,7 @@ import { feedUrlFor, ingestSource, processNewArticles, type SourceRow } from '..
 import { discoverFeeds, probeFeed } from '../news/discover.js';
 import { FetchError, validateUrl } from '../net/safeFetch.js';
 import { explainStory, queryFeed } from '../news/query.js';
-import { mergeClusters, ungroupArticle } from '../news/cluster.js';
+import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics } from '../news/topics.js';
 import { getPrefs, savePrefs } from '../settings.js';
 import { RANGES, type MarketService, type Range } from '../market/service.js';
@@ -144,6 +144,12 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     if (b.priority !== undefined) add('priority', b.priority); if (b.coverage !== undefined) add('coverage', b.coverage);
     if (b.categories !== undefined) add('categories', JSON.stringify(b.categories)); if (b.isLocal !== undefined) add('is_local', b.isLocal ? 1 : 0);
     if (sets.length) db.prepare(`UPDATE sources SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
+    // Coverage is evaluated at query time, so it takes effect immediately. Categories feed story categories: refresh the affected stories (local, no AI).
+    if (b.categories !== undefined) {
+      const clusters = db.prepare(`SELECT cluster_id FROM articles WHERE source_id = @id AND cluster_id IS NOT NULL
+        UNION SELECT a.cluster_id FROM article_sources x JOIN articles a ON a.id = x.article_id WHERE x.source_id = @id AND a.cluster_id IS NOT NULL`).all({ id }) as { cluster_id: number }[];
+      db.transaction(() => { for (const r of clusters) recomputeCluster(db, r.cluster_id); })();
+    }
     return { ok: true };
   });
   app.delete('/api/sources/:id', async (req) => {
@@ -181,7 +187,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     if (!r.changes) return reply.code(404).send({ error: 'not_found' });
     reindexTopics(db); return { ok: true }; // local-only: cached AI summaries are reused
   });
-  app.delete('/api/topics/:id', async (req) => { const { id } = idParam.parse(req.params); db.prepare('DELETE FROM topics WHERE id = ?').run(id); return { ok: true }; });
+  app.delete('/api/topics/:id', async (req) => { const { id } = idParam.parse(req.params); db.prepare('DELETE FROM topics WHERE id = ?').run(id); reindexTopics(db); return { ok: true }; }); // also clears blocked flags the topic caused
 
   // ---- preferences ----
   const prefsSchema = z.object({

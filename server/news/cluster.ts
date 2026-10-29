@@ -1,5 +1,5 @@
 import type { DB } from '../db.js';
-import type { Ai } from '../ai/gemini.js';
+import { BASE_CATEGORIES, type Ai } from '../ai/gemini.js';
 import { entities, jaccard, sha256, tokens } from './normalize.js';
 
 export const MERGE_THRESHOLD = 0.55;
@@ -40,6 +40,33 @@ function moveArticle(db: DB, articleId: number, to: number, manual = 0) {
   return from;
 }
 
+/**
+ * A niche (interest-only) source with exactly ONE configured category defaults its articles to it. Broad publishers never do,
+ * and multi-category sources are ambiguous, so neither is forced into a narrow category (they remain AI hints only).
+ */
+export function sourceDefaultCategory(categoriesJson: string | null, coverage: string | null): string | null {
+  if (coverage !== 'interest') return null;
+  let list: unknown; try { list = JSON.parse(categoriesJson ?? '[]'); } catch { return null; }
+  return Array.isArray(list) && list.length === 1 && typeof list[0] === 'string' && list[0].trim() ? list[0].trim() : null;
+}
+
+/** Matches a typed category to a known one case-insensitively ('automotive' -> 'Automotive'), else keeps it as typed. */
+function canonicalCategory(db: DB, name: string): string {
+  const known = [...BASE_CATEGORIES, ...(db.prepare("SELECT name FROM topics WHERE kind = 'category'").all() as { name: string }[]).map((r) => r.name)];
+  return known.find((k) => k.toLowerCase() === name.toLowerCase()) ?? name;
+}
+
+/** Story category: a specific AI classification always wins; the generic 'Other' or a missing one falls back to a source default. */
+function pickCategory(db: DB, ordered: any[]): string | null {
+  const cats = ordered.map((m) => {
+    const ai = m.ai_category as string | null;
+    if (ai && ai !== 'Other') return ai;
+    const def = sourceDefaultCategory(m.src_categories, m.src_coverage);
+    return def ? canonicalCategory(db, def) : ai;
+  }).filter((x): x is string => Boolean(x));
+  return cats.find((x) => x !== 'Other') ?? cats[0] ?? null;
+}
+
 /** A summary is usable only if it has real text, not merely a row/NULL/blank. */
 export const isUsableSummary = (s: string | null | undefined): s is string => typeof s === 'string' && s.trim().length >= 20;
 
@@ -48,7 +75,7 @@ export function clusterContentHash(contentHashes: string[]): string { return sha
 
 /** Recomputes derived cluster fields from members. Deletes the cluster if empty. Writes only when something changed. */
 export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false): void {
-  const members = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.importance, a.ai_category, a.summary, a.summary_kind, a.content_hash, s.priority
+  const members = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.importance, a.ai_category, a.summary, a.summary_kind, a.content_hash, s.priority, s.categories AS src_categories, s.coverage AS src_coverage
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.cluster_id = ?`).all(clusterId) as any[];
   if (!members.length) { db.prepare('DELETE FROM story_clusters WHERE id = ?').run(clusterId); return; }
   const rank = (m: any) => (m.summary_kind === 'ai' ? 2 : m.summary_kind === 'excerpt' ? 1 : 0) * 10 + m.priority * 3;
@@ -58,7 +85,7 @@ export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false)
   const cur = db.prepare('SELECT * FROM story_clusters WHERE id = ?').get(clusterId) as any;
   if (!cur) return;
   const next = {
-    primary_article_id: primary.id, title: primary.title, category: primary.ai_category,
+    primary_article_id: primary.id, title: primary.title, category: pickCategory(db, ordered),
     importance: Math.min(1, Math.max(...members.map((m) => m.importance ?? 0.3)) + 0.04 * (pubs.size - 1)),
     article_count: members.length, source_count: pubs.size,
     first_published_at: Math.min(...members.map((m) => m.published_at)), last_published_at: Math.max(...members.map((m) => m.published_at)),

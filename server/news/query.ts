@@ -14,6 +14,18 @@ export interface StoryDto {
 }
 export interface FeedPage { items: StoryDto[]; nextCursor: string | null; total?: number }
 
+/**
+ * ELIGIBILITY (filtering), kept separate from ranking. A story may appear if ANY of its articles is
+ *  - carried by a 'comprehensive' feed (originating feed or any other feed in article_sources), or
+ *  - matches one of the user's interests and hits none of their exclude keywords (blocked stays blocked).
+ * Interest-only feeds therefore only surface matching stories, a story also carried by a general feed stays eligible through it,
+ * and nothing is ever deleted: changing interests or a feed's coverage changes the result immediately, with no re-ingestion.
+ */
+export const ELIGIBLE_SQL = `EXISTS (SELECT 1 FROM articles ea WHERE ea.cluster_id = c.id AND (
+    EXISTS (SELECT 1 FROM sources es WHERE es.coverage = 'comprehensive' AND (es.id = ea.source_id
+      OR EXISTS (SELECT 1 FROM article_sources ex WHERE ex.article_id = ea.id AND ex.source_id = es.id)))
+    OR (ea.blocked = 0 AND EXISTS (SELECT 1 FROM article_topics et WHERE et.article_id = ea.id))))`;
+
 const esc = (s: string) => s.replace(/[\\%_]/g, (m) => '\\' + m);
 const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const dec = (s?: string) => { try { return s ? JSON.parse(Buffer.from(s, 'base64url').toString()) : null; } catch { return null; } };
@@ -31,7 +43,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   const where: string[] = []; const params: any[] = [];
   const cutoff = Date.now() - prefs.retentionDays * 86_400_000;
   // Saved lists every bookmark regardless of age (pruneOldData also keeps bookmarked stories); all other tabs honor retention.
-  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); }
+  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(ELIGIBLE_SQL); } // Saved always shows every bookmark
   if (fq.tab !== 'saved') where.push('rs.hidden_at IS NULL');
   if (fq.tab === 'unread') where.push('rs.read_at IS NULL');
   if (fq.tab === 'saved') where.push('b.cluster_id IS NOT NULL');
@@ -39,7 +51,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   if (fq.tab === 'topic' && fq.topic) {
     const t = loadTopics(db).find((x) => x.name === fq.topic);
     if (t?.kind === 'interest') { where.push('EXISTS (SELECT 1 FROM article_topics att JOIN articles a ON a.id = att.article_id WHERE a.cluster_id = c.id AND att.topic_id = ?)'); params.push(t.id); }
-    else { where.push('c.category = ?'); params.push(fq.topic); }
+    else { where.push('c.category = ? COLLATE NOCASE'); params.push(fq.topic); }
   }
   for (const tok of (fq.q ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 6)) {
     const like = `%${esc(tok)}%`;

@@ -212,4 +212,11 @@ CREATE INDEX idx_article_sources_source ON article_sources(source_id);
 INSERT INTO article_sources (article_id, source_id, first_seen_at) SELECT id, source_id, fetched_at FROM articles;
 `,
   },
+  {
+    id: 3,
+    name: 'article_blocked',
+    // 1 when the article's text hits one of the user's exclude keywords. Maintained locally (no AI) whenever interests change or an
+    // article is ingested; interest-only sources never surface blocked articles.
+    sql: 'ALTER TABLE articles ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;',
+  },
 ];
