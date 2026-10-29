@@ -18,7 +18,7 @@ export default function App() {
   const [newStories, setNewStories] = useState(false);
   const wasRefreshing = useRef(false);
 
-  useEffect(() => { api<{ email: string; csrfToken: string }>('/api/me').then((m) => { setCsrf(m.csrfToken); setMe(m); }).catch((e) => setMe(e instanceof ApiError && e.status === 401 ? null : null)); }, []);
+  useEffect(() => { api<{ email: string; csrfToken: string; theme: 'light' | 'dark' | 'system' }>('/api/me').then((m) => { setCsrf(m.csrfToken); setMe(m); if (m.theme !== 'system') setTheme(m.theme); /* saved choice wins over this device's default */ }).catch((e) => setMe(e instanceof ApiError && e.status === 401 ? null : null)); }, []);
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); try { localStorage.theme = theme; } catch { /* private mode */ } }, [theme]);
   const loadTopics = useCallback(() => api<Topic[]>('/api/topics').then(setTopics).catch(() => {}), []);
   useEffect(() => { if (me && me !== 'loading') void loadTopics(); }, [me, loadTopics]);
@@ -52,7 +52,7 @@ export default function App() {
           <h1 className="text-lg font-bold tracking-tight">News <span className="text-indigo-600">&amp;</span> Markets</h1><span className="flex-1" />
           <div className="hidden text-xs text-slate-500 sm:block" aria-live="polite">{status?.newsRefreshing ? <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 animate-pulse rounded-full bg-indigo-500" />Refreshing in background</span> : `News updated ${timeAgo(status?.lastNewsRefreshAt)}`}</div>
           <button className="btn btn-outline" onClick={refresh} disabled={status?.newsRefreshing} title="Fetch new stories now">↻ <span className="hidden sm:inline">Refresh</span></button>
-          <button className="btn btn-ghost" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Toggle dark mode">{theme === 'dark' ? '☀️' : '🌙'}</button>
+          <button className="btn btn-ghost" onClick={() => { const next = theme === 'dark' ? 'light' : 'dark'; setTheme(next); void api('/api/theme', { method: 'PUT', body: { theme: next } }).catch(() => {}); }} aria-label="Toggle dark mode">{theme === 'dark' ? '☀️' : '🌙'}</button>
           <button className="btn btn-ghost" onClick={() => setSettings('sources')} aria-label="Settings">⚙ <span className="hidden sm:inline">Settings</span></button>
           <button className="btn btn-ghost text-xs" onClick={async () => { await api('/auth/logout', { method: 'POST' }); location.reload(); }} title={me.email}>Sign out</button>
         </div>

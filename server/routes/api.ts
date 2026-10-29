@@ -48,7 +48,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
 
   app.addHook('onSend', async (req, reply) => { if (req.url.startsWith('/api/')) reply.header('cache-control', 'private, no-store'); });
 
-  app.get('/api/me', async (req) => ({ email: req.session!.email, name: req.session!.name, csrfToken: req.session!.csrf }));
+  app.get('/api/me', async (req) => ({ email: req.session!.email, name: req.session!.name, csrfToken: req.session!.csrf, theme: getPrefs(db).theme }));
   app.get('/api/status', async () => status());
 
   // ---- feed (stale-while-revalidate: serve cached rows now, refresh in the background) ----
@@ -178,10 +178,12 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     weights: z.object({ interests: z.number().min(0).max(1), importance: z.number().min(0).max(1), recency: z.number().min(0).max(1), source: z.number().min(0).max(1), feedback: z.number().min(0).max(1) }),
     quotas: z.object({ personalized: z.number().min(0).max(1), major: z.number().min(0).max(1), local: z.number().min(0).max(1) }),
     preferredPublishers: z.array(z.string().max(80)).max(50), mutedPublishers: z.array(z.string().max(80)).max(50),
-    showImages: z.boolean(), retentionDays: z.number().int().min(7).max(365), staleMinutes: z.number().int().min(15).max(1440),
+    theme: z.enum(['light', 'dark', 'system']).optional(), showImages: z.boolean(), retentionDays: z.number().int().min(7).max(365), staleMinutes: z.number().int().min(15).max(1440),
   });
   app.get('/api/prefs', async () => ({ prefs: getPrefs(db), publishers: (db.prepare('SELECT DISTINCT publisher FROM articles ORDER BY publisher').all() as any[]).map((r) => r.publisher) }));
-  app.put('/api/prefs', async (req) => { savePrefs(db, prefsSchema.parse(req.body)); return { ok: true }; });
+  app.put('/api/prefs', async (req) => { const p = prefsSchema.parse(req.body); savePrefs(db, { ...p, theme: p.theme ?? getPrefs(db).theme }); return { ok: true }; });
+  // Light/dark choice is stored server-side so it follows you across devices and survives deploys. No write if unchanged.
+  app.put('/api/theme', async (req) => { const { theme } = z.object({ theme: z.enum(['light', 'dark', 'system']) }).parse(req.body); const cur = getPrefs(db); if (cur.theme !== theme) savePrefs(db, { ...cur, theme }); return { theme }; });
   app.put('/api/ai/budget', async (req) => { const { budget } = z.object({ budget: z.number().int().min(0).max(100000) }).parse(req.body); setSetting(db, 'ai_daily_budget', budget); return { ok: true }; });
 
   // ---- market ----

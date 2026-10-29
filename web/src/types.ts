@@ -21,5 +21,5 @@ export interface Topic { id: number; name: string; kind: 'category' | 'interest'
 export interface Prefs {
   weights: { interests: number; importance: number; recency: number; source: number; feedback: number };
   quotas: { personalized: number; major: number; local: number };
-  preferredPublishers: string[]; mutedPublishers: string[]; showImages: boolean; retentionDays: number; staleMinutes: number;
+  preferredPublishers: string[]; mutedPublishers: string[]; theme: 'light' | 'dark' | 'system'; showImages: boolean; retentionDays: number; staleMinutes: number;
 }

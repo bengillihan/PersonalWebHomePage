@@ -188,5 +188,23 @@ describe('API validation & behavior', () => {
     expect(h.headers['content-security-policy']).toContain("default-src 'self'"); expect(h.headers['x-content-type-options']).toBe('nosniff');
     expect((await call('GET', '/api/status')).headers['cache-control']).toBe('private, no-store');
   });
+  it('saves the light/dark preference server-side: persists, survives preference saves, validates, and skips no-op writes', async () => {
+    expect((await call('GET', '/api/me')).json().theme).toBe('system');
+    expect((await call('PUT', '/api/theme', { theme: 'dark' })).json()).toEqual({ theme: 'dark' });
+    expect((await call('GET', '/api/me')).json().theme).toBe('dark');
+    expect(JSON.parse((db.prepare("SELECT value FROM application_settings WHERE key = 'prefs'").get() as any).value).theme).toBe('dark'); // in SQLite
+    const prefs = (await call('GET', '/api/prefs')).json().prefs;
+    expect(prefs.theme).toBe('dark');
+    const { theme: _t, ...withoutTheme } = prefs;
+    expect((await call('PUT', '/api/prefs', withoutTheme)).statusCode).toBe(200); // an older client that omits theme must not reset it
+    expect((await call('GET', '/api/me')).json().theme).toBe('dark');
+    expect((await call('PUT', '/api/prefs', { ...prefs, theme: 'light' })).statusCode).toBe(200);
+    expect((await call('GET', '/api/me')).json().theme).toBe('light');
+    const before = (db.prepare('SELECT total_changes() n').get() as any).n;
+    await call('PUT', '/api/theme', { theme: 'light' });
+    expect((db.prepare('SELECT total_changes() n').get() as any).n).toBe(before); // unchanged -> no write
+    expect((await call('PUT', '/api/theme', { theme: 'purple' })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PUT', url: '/api/theme', payload: { theme: 'dark' } })).statusCode).toBe(401);
+  });
   it('rss helper sanity (keeps fixture helper exercised)', () => { expect(rss([{ title: 't', link: 'https://x', date: hoursAgo(1) }])).toContain('<item>'); });
 });

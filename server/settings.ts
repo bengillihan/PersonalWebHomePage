@@ -9,6 +9,7 @@ export interface Prefs {
   showImages: boolean;
   retentionDays: number;
   staleMinutes: number;
+  theme: 'light' | 'dark' | 'system';
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -19,6 +20,7 @@ export const DEFAULT_PREFS: Prefs = {
   showImages: true,
   retentionDays: 90,
   staleMinutes: 60,
+  theme: 'system',
 };
 
 export function getPrefs(db: DB): Prefs {
