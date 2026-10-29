@@ -20,13 +20,17 @@ import { checkPersistence, type PersistenceReport } from './storage.js';
 import { Weather, type WeatherOptions } from './weather/weather.js';
 import { registerWeather } from './routes/weather.js';
 import { FetchError } from './net/safeFetch.js';
+import { redactUrl, scrubSecrets } from './logging.js';
 
-export interface AppOverrides { oidc?: OidcClient | null; transport?: AiTransport | null; provider?: MarketProvider; fetchOpts?: { allowPrivate?: boolean }; logger?: boolean; weather?: WeatherOptions; persistence?: PersistenceReport }
+export interface AppOverrides { oidc?: OidcClient | null; transport?: AiTransport | null; provider?: MarketProvider; fetchOpts?: { allowPrivate?: boolean }; logger?: boolean; logStream?: { write(msg: string): void }; weather?: WeatherOptions; persistence?: PersistenceReport }
 export interface Built { app: FastifyInstance; refresher: Refresher; ai: Ai; market: MarketService }
 
 export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promise<Built> {
   const app = Fastify({
-    logger: o.logger === false ? false : { level: cfg.isProd ? 'info' : 'debug', redact: ['req.headers.cookie', 'req.headers.authorization', 'req.headers["x-csrf-token"]'] },
+    logger: o.logger === false ? false : { level: cfg.isProd ? 'info' : 'debug', redact: ['req.headers.cookie', 'req.headers.authorization', 'req.headers["x-csrf-token"]'],
+      // the default serializer logs the raw URL, which includes OAuth codes and search text
+      serializers: { req: (req: any) => ({ method: req.method, url: redactUrl(req.url), host: req.host, remoteAddress: req.ip, remotePort: req.socket?.remotePort }) },
+      ...(o.logStream ? { stream: o.logStream } : {}) },
     trustProxy: true, // Railway terminates TLS in front of the app
     bodyLimit: 256 * 1024,
   });
@@ -63,7 +67,7 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
     if (err instanceof ZodError) return reply.code(400).send({ error: 'invalid_input', issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })) });
     if (err instanceof FetchError) return reply.code(err.code === 'not_found' ? 404 : 422).send({ error: err.code, message: err.message });
     if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: err.code ?? 'error', message: err.message });
-    req.log.error({ err: { message: err.message, stack: cfg.isProd ? undefined : err.stack }, url: req.url }, 'unhandled error');
+    req.log.error({ err: { message: scrubSecrets(String(err.message)), stack: cfg.isProd || !err.stack ? undefined : scrubSecrets(err.stack) }, url: redactUrl(req.url) }, 'unhandled error');
     return reply.code(500).send({ error: 'internal_error' });
   });
 

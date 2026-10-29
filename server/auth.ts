@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { Config } from './config.js';
+import { scrubSecrets } from './logging.js';
 import type { DB } from './db.js';
 
 export interface OidcIdentity { sub: string; email: string; emailVerified: boolean; name: string | null; nonce: string | null }
@@ -105,7 +106,7 @@ export function registerAuth(app: FastifyInstance, cfg: Config, db: DB, oidc: Oi
       startSession(reply, id.email, id.sub, id.name);
       return reply.redirect('/');
     } catch (e) {
-      req.log.warn({ err: (e as Error).message }, 'oauth callback failed');
+      req.log.warn({ err: scrubSecrets(String((e as Error).message)).slice(0, 200) }, 'oauth callback failed');
       return reply.code(400).send({ error: 'login_failed' });
     }
   });
