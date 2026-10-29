@@ -26,6 +26,7 @@ export const ELIGIBLE_SQL = `EXISTS (SELECT 1 FROM articles ea WHERE ea.cluster_
       OR EXISTS (SELECT 1 FROM article_sources ex WHERE ex.article_id = ea.id AND ex.source_id = es.id)))
     OR (ea.blocked = 0 AND EXISTS (SELECT 1 FROM article_topics et WHERE et.article_id = ea.id))))`;
 
+const SNAPSHOT_MAX = 800; // candidate pool size, and the most ids a cursor can carry
 const esc = (s: string) => s.replace(/[\\%_]/g, (m) => '\\' + m);
 const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const dec = (s?: string) => { try { return s ? JSON.parse(Buffer.from(s, 'base64url').toString()) : null; } catch { return null; } };
@@ -74,19 +75,34 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
     return { items, nextCursor: rows.length > limit && last ? enc({ t: last.last_published_at, i: last.id }) : null };
   }
 
-  // Personalized/explore: score the recent candidate pool in memory (single user, bounded pool), then paginate by offset.
+  // Personalized/explore: ranking is computed over a bounded recent pool, then served from a SNAPSHOT of the ranked order. The cursor carries
+  // the ids still to serve, in ranked order, so reading/hiding/re-ranking stories between page requests can never shift later pages (an
+  // offset into a re-computed list skips unseen stories whenever the list shrinks). It is stateless, so it also survives the service
+  // sleeping. A story that stopped qualifying in the meantime (e.g. read on another device) is simply dropped when its turn comes.
   where[0] = 'c.last_published_at >= ?'; params[0] = Math.max(cutoff, Date.now() - 14 * 86_400_000);
-  const rows = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} ORDER BY c.last_published_at DESC LIMIT 800`).all(...params) as any[];
-  const scored = scoreRows(db, rows);
-  let ordered: Scored[];
-  if (fq.tab === 'explore') {
-    ordered = scored.filter((s) => s.c.interestScore < 0.1 && !s.c.excluded && s.c.rating !== -1 && (s.parts.feedback >= 0.35))
-      .sort((a, b) => b.c.importance * b.parts.recency - a.c.importance * a.parts.recency);
-  } else ordered = balanceFeed(scored, prefs.quotas);
-  const offset = Number(dec(fq.cursor)?.o ?? 0);
-  const slice = ordered.slice(offset, offset + limit);
-  const items = hydrate(db, slice.map((s) => rows.find((r) => r.id === s.c.id)), new Map(slice.map((s) => [s.c.id, s])));
-  return { items, nextCursor: offset + limit < ordered.length ? enc({ o: offset + limit }) : null, total: ordered.length };
+  const cur = dec(fq.cursor);
+  let remaining: number[]; let total: number;
+  if (Array.isArray(cur?.r)) { // later page: continue the snapshot
+    remaining = (cur.r as unknown[]).filter((x): x is number => Number.isInteger(x) && (x as number) > 0).slice(0, SNAPSHOT_MAX);
+    total = Number.isInteger(cur.t) ? cur.t : remaining.length;
+  } else { // first page (or an older offset-style cursor, which restarts; the client de-duplicates): rank the pool now
+    const pool = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} ORDER BY c.last_published_at DESC LIMIT ${SNAPSHOT_MAX}`).all(...params) as any[];
+    const scored = scoreRows(db, pool);
+    const ordered: Scored[] = fq.tab === 'explore'
+      ? scored.filter((s) => s.c.interestScore < 0.1 && !s.c.excluded && s.c.rating !== -1 && (s.parts.feedback >= 0.35)).sort((a, b) => b.c.importance * b.parts.recency - a.c.importance * a.parts.recency)
+      : balanceFeed(scored, prefs.quotas);
+    remaining = ordered.map((s) => s.c.id); total = ordered.length;
+  }
+  const page: any[] = []; let pos = 0;
+  while (page.length < limit && pos < remaining.length) {
+    const slice = remaining.slice(pos, pos + (limit - page.length)); pos += slice.length;
+    const found = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} AND c.id IN (${slice.map(() => '?').join(',')})`).all(...params, ...slice) as any[];
+    const byId = new Map(found.map((r) => [r.id, r]));
+    for (const id of slice) { const r = byId.get(id); if (r) page.push(r); } // snapshot order; ineligible-by-now stories are skipped
+  }
+  const next = remaining.slice(pos);
+  const why = new Map(scoreRows(db, page).map((s) => [s.c.id, s]));
+  return { items: hydrate(db, page, why), nextCursor: next.length ? enc({ r: next, t: total }) : null, total };
 }
 
 function scoreRows(db: DB, rows: any[]): Scored[] {

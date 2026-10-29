@@ -56,7 +56,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
 
   // ---- feed (stale-while-revalidate: serve cached rows now, refresh in the background) ----
   app.get('/api/feed', async (req) => {
-    const q = z.object({ tab: z.string().max(30).default('foryou'), q: z.string().max(100).optional(), topic: z.string().max(80).optional(), cursor: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(50).optional() }).parse(req.query);
+    const q = z.object({ tab: z.string().max(30).default('foryou'), q: z.string().max(100).optional(), topic: z.string().max(80).optional(), cursor: z.string().max(12_000).optional() /* ranked pages carry a snapshot of the ids still to serve */, limit: z.coerce.number().int().min(1).max(50).optional() }).parse(req.query);
     if (!q.cursor) { refresher.maybeRefresh(); void market.refreshIfNeeded().catch(() => {}); }
     const page = queryFeed(db, q);
     const total = (db.prepare('SELECT COUNT(*) n FROM story_clusters').get() as any).n;
