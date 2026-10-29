@@ -30,7 +30,8 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   const prefs = getPrefs(db);
   const where: string[] = []; const params: any[] = [];
   const cutoff = Date.now() - prefs.retentionDays * 86_400_000;
-  where.push('c.last_published_at >= ?'); params.push(cutoff);
+  // Saved lists every bookmark regardless of age (pruneOldData also keeps bookmarked stories); all other tabs honor retention.
+  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); }
   if (fq.tab !== 'saved') where.push('rs.hidden_at IS NULL');
   if (fq.tab === 'unread') where.push('rs.read_at IS NULL');
   if (fq.tab === 'saved') where.push('b.cluster_id IS NOT NULL');
