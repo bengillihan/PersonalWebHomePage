@@ -10,6 +10,7 @@ export interface StoryDto {
   isRead: boolean; isUpdated: boolean; bookmarked: boolean; rating: number; imageUrl: string | null;
   primary: { publisher: string; url: string; aggregated: boolean } | null;
   articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[] }[];
+  blockedBy: string[]; // enabled "Not interested" topics that match EVERY article of this story (it is hidden from feeds, shown in Saved/search)
   why?: { score: number; parts: Record<string, number>; reasons: string[]; bucket: string };
 }
 export interface FeedPage { items: StoryDto[]; nextCursor: string | null; total?: number }
@@ -21,10 +22,17 @@ export interface FeedPage { items: StoryDto[]; nextCursor: string | null; total?
  * Interest-only feeds therefore only surface matching stories, a story also carried by a general feed stays eligible through it,
  * and nothing is ever deleted: changing interests or a feed's coverage changes the result immediately, with no re-ingestion.
  */
-export const ELIGIBLE_SQL = `EXISTS (SELECT 1 FROM articles ea WHERE ea.cluster_id = c.id AND (
+/**
+ * Same as above, plus HARD EXCLUSIONS (Settings -> Interests -> Not interested), applied per ARTICLE before the story is judged: an article
+ * that matches an enabled blocked topic cannot make a story eligible, but a story stays visible while at least one of its other articles
+ * qualifies, so a single passing mention in one source never hides a story covered for other reasons. Used by every feed except Saved and
+ * search; blocked articles stay in SQLite and remain reachable there.
+ */
+export const eligibleSql = (hardBlocks: boolean) => `EXISTS (SELECT 1 FROM articles ea WHERE ea.cluster_id = c.id${hardBlocks ? ` AND NOT EXISTS (SELECT 1 FROM article_blocks ab JOIN blocked_topics bt ON bt.id = ab.topic_id WHERE ab.article_id = ea.id AND bt.enabled = 1)` : ''} AND (
     EXISTS (SELECT 1 FROM sources es WHERE es.coverage = 'comprehensive' AND (es.id = ea.source_id
       OR EXISTS (SELECT 1 FROM article_sources ex WHERE ex.article_id = ea.id AND ex.source_id = es.id)))
     OR (ea.blocked = 0 AND EXISTS (SELECT 1 FROM article_topics et WHERE et.article_id = ea.id))))`;
+export const ELIGIBLE_SQL = eligibleSql(false);
 
 const SNAPSHOT_MAX = 800; // candidate pool size, and the most ids a cursor can carry
 const esc = (s: string) => s.replace(/[\\%_]/g, (m) => '\\' + m);
@@ -44,7 +52,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   const where: string[] = []; const params: any[] = [];
   const cutoff = Date.now() - prefs.retentionDays * 86_400_000;
   // Saved lists every bookmark regardless of age (pruneOldData also keeps bookmarked stories); all other tabs honor retention.
-  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(ELIGIBLE_SQL); } // Saved always shows every bookmark
+  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(eligibleSql(!(fq.q ?? '').trim())); } // Saved always shows every bookmark
   if (fq.tab !== 'saved') where.push('rs.hidden_at IS NULL');
   if (fq.tab === 'unread') where.push('rs.read_at IS NULL'); // strictly unread
   // Read stories are hidden from the main feeds unless 'Show read stories' is on. Never hidden in Saved, in Unread's own rule above, or in
@@ -154,6 +162,8 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>): StoryDto[] {
   const via = new Map<number, string[]>();
   for (const v of db.prepare(`SELECT x.article_id, s.name FROM article_sources x JOIN articles a ON a.id = x.article_id JOIN sources s ON s.id = x.source_id
     WHERE a.cluster_id IN (${marks}) AND x.source_id != a.source_id ORDER BY s.name`).all(...ids) as { article_id: number; name: string }[]) (via.get(v.article_id) ?? via.set(v.article_id, []).get(v.article_id)!).push(v.name);
+  const blockedArticles = new Map<number, string[]>();
+  if (arts.length) for (const r of db.prepare(`SELECT ab.article_id, bt.name FROM article_blocks ab JOIN blocked_topics bt ON bt.id = ab.topic_id WHERE bt.enabled = 1 AND ab.article_id IN (${arts.map(() => '?').join(',')})`).all(...arts.map((a) => a.id)) as { article_id: number; name: string }[]) (blockedArticles.get(r.article_id) ?? blockedArticles.set(r.article_id, []).get(r.article_id)!).push(r.name);
   const by = new Map<number, any[]>();
   for (const a of arts) (by.get(a.cluster_id) ?? by.set(a.cluster_id, []).get(a.cluster_id)!).push(a);
   return rows.map((r) => {
@@ -167,6 +177,7 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>): StoryDto[] {
       imageUrl: prim?.image_url ?? null,
       primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator' } : null,
       articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [] })),
+      blockedBy: list.length && list.every((a) => blockedArticles.has(a.id)) ? [...new Set(list.flatMap((a) => blockedArticles.get(a.id)!))] : [],
       ...(w ? { why: { score: w.score, parts: w.parts as any, reasons: w.reasons, bucket: w.bucket } } : {}),
     };
   });

@@ -225,4 +225,29 @@ INSERT INTO article_sources (article_id, source_id, first_seen_at) SELECT id, so
     // Per-source override of how long a feed may go without a new article before it is 'stale' (NULL = default: 24h major, 72h local).
     sql: 'ALTER TABLE sources ADD COLUMN freshness_hours INTEGER CHECK (freshness_hours IS NULL OR freshness_hours BETWEEN 1 AND 336);',
   },
+  {
+    id: 5,
+    name: 'blocked_topics',
+    // Hard exclusions ("Not interested"), kept separate from soft thumbs-down feedback. article_blocks holds, per article, which topics match it
+    // (computed locally from keywords/classifications). Whether a topic applies is read from blocked_topics.enabled at query time, so toggling a
+    // topic takes effect instantly; articles are never deleted.
+    sql: `
+CREATE TABLE blocked_topics (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL DEFAULT '',
+  keywords TEXT NOT NULL DEFAULT '[]',
+  categories TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  seed_key TEXT UNIQUE,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE article_blocks (
+  article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  topic_id INTEGER NOT NULL REFERENCES blocked_topics(id) ON DELETE CASCADE,
+  PRIMARY KEY (article_id, topic_id)
+) WITHOUT ROWID;
+CREATE INDEX idx_article_blocks_topic ON article_blocks(topic_id);
+`,
+  },
 ];

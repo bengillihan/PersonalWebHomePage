@@ -188,7 +188,7 @@ describe('API, migration and compatibility', () => {
     for (const m of MIGRATIONS.filter((x) => x.id <= 3)) { raw.exec(m.sql); raw.prepare('INSERT INTO schema_migrations VALUES (?,?,0)').run(m.id, m.name); }
     raw.prepare("INSERT INTO sources (name, site_url, feed_url, priority, health, last_checked_at, last_item_at, categories, created_at) VALUES ('Old','https://old.example','https://old.example/feed',2,'ok',5,6,'[\"X\"]',1)").run();
     const before = raw.prepare('SELECT * FROM sources').all();
-    expect(migrate(raw as DB)).toEqual([4]);
+    expect(migrate(raw as DB)).toEqual(MIGRATIONS.filter((x) => x.id >= 4).map((x) => x.id)); // migration 4 and anything after it
     const after = raw.prepare('SELECT * FROM sources').all() as any[];
     expect(after[0].freshness_hours).toBeNull(); const { freshness_hours: _f, ...rest } = after[0]; expect([rest]).toEqual(before);
     expect(() => raw.prepare('UPDATE sources SET freshness_hours = 0').run()).toThrow(/CHECK/);

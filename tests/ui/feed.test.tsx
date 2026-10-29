@@ -6,7 +6,7 @@ import type { Story } from '../../web/src/types';
 
 const story = (id: number, o: Partial<Story> = {}): Story => ({
   id, title: `Story ${id}`, summary: `Summary of story ${id}.`, summaryKind: 'excerpt', differences: null, category: null, importance: 0.5,
-  publishedAt: Date.now() - id * 60_000, updatedAt: 1, sourceCount: 1, isRead: false, isUpdated: false, bookmarked: false, rating: 0, imageUrl: null,
+  publishedAt: Date.now() - id * 60_000, updatedAt: 1, sourceCount: 1, isRead: false, isUpdated: false, bookmarked: false, rating: 0, imageUrl: null, blockedBy: [],
   primary: { publisher: `Pub ${id}`, url: `https://example.com/${id}`, aggregated: false },
   articles: [{ id, publisher: `Pub ${id}`, title: `Story ${id}`, url: `https://example.com/${id}`, publishedAt: 1, aggregated: false, alsoVia: [] }], ...o,
 });

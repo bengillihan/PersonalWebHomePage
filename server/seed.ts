@@ -26,6 +26,21 @@ export const SEED_WATCHLIST = [
   { key: 'ixic', symbol: 'IXIC', name: 'NASDAQ Composite', type: 'index' },
 ] as const;
 
+/**
+ * Hard exclusions seeded once (like the other seeds, a deleted one is not resurrected). Keywords are whole words/phrases. Nicknames that are also
+ * ordinary words or other teams (Kraken the crypto exchange, Jets, Rangers, Flames, Panthers, Kings, Ducks, Capitals...) and teams named like weather or wildlife (Colorado Avalanche, Florida Panthers, Carolina Hurricanes) are NOT listed are NOT listed
+ * alone; those teams are matched by full name, so unrelated stories are not swept up.
+ */
+export const SEED_BLOCKED = [
+  { key: 'hockey', name: 'Hockey / NHL', description: 'Hockey and NHL news: games, scores, trades, players, teams and hockey commentary',
+    keywords: ['hockey', 'nhl', 'ahl', 'stanley cup', 'nhl draft', 'penalty kill', 'goaltender', 'puck', 'seattle kraken', 'vancouver canucks', 'canucks', 'boston bruins',
+      'toronto maple leafs', 'maple leafs', 'montreal canadiens', 'canadiens', 'chicago blackhawks', 'blackhawks', 'detroit red wings', 'red wings', 'vegas golden knights',
+      'edmonton oilers', 'oilers', 'calgary flames', 'nashville predators', 'buffalo sabres', 'columbus blue jackets', 'philadelphia flyers', 'new york islanders',
+      'winnipeg jets', 'washington capitals', 'tampa bay lightning', 'ottawa senators', 'new jersey devils', 'san jose sharks', 'minnesota wild',
+      'dallas stars', 'st. louis blues', 'anaheim ducks', 'los angeles kings', 'new york rangers', 'pittsburgh penguins',
+      'utah hockey club', 'utah mammoth'] },
+] as const;
+
 export function seedDefaults(db: DB): void {
   const marker = db.prepare('SELECT 1 FROM application_settings WHERE key = ?');
   const mark = db.prepare('INSERT OR IGNORE INTO application_settings (key, value) VALUES (?, ?)');
@@ -44,6 +59,12 @@ export function seedDefaults(db: DB): void {
       const mk = `seeded:watch:${w.key}`;
       if (marker.get(mk)) continue;
       db.prepare('INSERT OR IGNORE INTO watchlist (symbol, name, instrument_type, position, seed_key) VALUES (?,?,?,?,?)').run(w.symbol, w.name, w.type, pos, w.key);
+      mark.run(mk, '1');
+    }
+    for (const b of SEED_BLOCKED) {
+      const mk = `seeded:blocked:${b.key}`;
+      if (marker.get(mk)) continue;
+      db.prepare('INSERT OR IGNORE INTO blocked_topics (name, description, keywords, categories, enabled, seed_key, created_at) VALUES (?,?,?,?,1,?,?)').run(b.name, b.description, JSON.stringify(b.keywords), '[]', b.key, now);
       mark.run(mk, '1');
     }
   })();

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api, fullDate, timeAgo } from '../api';
 import type { Story } from '../types';
+import BlockTopicForm from './BlockTopicForm';
 
 const REASONS: [string, string][] = [['topic', 'Not interested in this topic'], ['already_knew', 'Already knew this'], ['low_importance', 'Low importance'], ['source', "Don't like this source"], ['duplicate', 'Duplicate']];
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
@@ -16,6 +17,8 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
   const [why, setWhy] = useState(false);
   const [askReason, setAskReason] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [blockOpen, setBlockOpen] = useState(false);
+  const [blockedNote, setBlockedNote] = useState<string | null>(null);
   const [expl, setExpl] = useState<Story['why'] | null>(story.why ?? null);
   const run = async (fn: () => Promise<unknown>, patch: Partial<Story>) => {
     const prev = story; onChange({ ...story, ...patch });
@@ -46,6 +49,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
             <time className="text-slate-600 dark:text-slate-300" dateTime={new Date(story.publishedAt).toISOString()} title={fullDate(story.publishedAt)}>{timeAgo(story.publishedAt)}</time>
             {story.category && <span className="chip">{story.category}</span>}
             {story.isUpdated && <span className="chip !bg-amber-100 !text-amber-800 dark:!bg-amber-900/40 dark:!text-amber-200">Updated</span>}
+            {story.blockedBy.length > 0 && <span className="chip !bg-rose-100 !text-rose-800 dark:!bg-rose-900/40 dark:!text-rose-200" title="Normally hidden from your feeds (Settings → Interests → Not interested). Shown here because you searched for it or saved it.">Blocked: {story.blockedBy.join(', ')}</span>}
             {p?.aggregated && <span className="chip" title="Found via a Google News aggregator feed; the link opens through Google News">via aggregator</span>}
           </div>
           <h2 className="text-lg font-semibold leading-snug sm:text-xl">
@@ -82,9 +86,12 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
         <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-50 p-2 text-sm dark:bg-slate-800/60" role="group" aria-label="Why thumbs down?">
           <span className="text-slate-500">Why? (optional)</span>
           {REASONS.map(([k, label]) => <button key={k} className="btn btn-outline !py-1 text-xs" onClick={() => { rate(-1, k); setAskReason(false); }}>{label}</button>)}
+          <button className="btn btn-outline !py-1 text-xs" onClick={() => setBlockOpen(true)}>Never show this topic…</button>
           <button className="btn btn-ghost !py-1 text-xs" onClick={() => setAskReason(false)}>Skip</button>
         </div>
       )}
+      {blockOpen && !blockedNote && <BlockTopicForm storyId={story.id} onCancel={() => setBlockOpen(false)} onBlocked={(name) => { setBlockedNote(name); setBlockOpen(false); setAskReason(false); setTimeout(() => onGone(story.id), 1200); }} />}
+      {blockedNote && <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-300" role="status">Blocked “{blockedNote}”. This story and similar ones are now hidden.</p>}
       {err && <p className="mt-2 text-sm text-red-600" role="alert">{err}</p>}
 
       {why && (

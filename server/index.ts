@@ -2,6 +2,7 @@ import { loadConfig, validateConfig } from './config.js';
 import { openDb } from './db.js';
 import { seedDefaults } from './seed.js';
 import { ensureTopicIndex } from './news/topics.js';
+import { ensureBlockIndex } from './news/blocking.js';
 import { buildApp } from './app.js';
 import { checkPersistence, databaseFileExists, ensureDbIdentity, formatRefusal } from './storage.js';
 
@@ -23,6 +24,7 @@ const db = openDb(cfg.sqlitePath);
 const { identity, status: dbStatus } = ensureDbIdentity(db, existedBefore);
 seedDefaults(db);
 ensureTopicIndex(db);
+ensureBlockIndex(db); // matches the seeded/blocked topics against articles already stored (one time)
 const { app } = await buildApp(cfg, db, { persistence, oidc: problems.length && !cfg.devLogin ? null : undefined });
 
 const dbInfo = { databaseId: identity.id, path: cfg.sqlitePath, createdAt: new Date(identity.createdAt).toISOString() };

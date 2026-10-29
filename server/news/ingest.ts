@@ -9,6 +9,7 @@ import { refreshHealth } from './health.js';
 import { canonicalizeUrl, normalizeTitle, sha1, sha256 } from './normalize.js';
 import { clusterArticles, clusterContentHash, isUsableSummary, recomputeCluster } from './cluster.js';
 import { indexArticleTopics, loadTopics } from './topics.js';
+import { indexArticleBlocks } from './blocking.js';
 import { sentencesFallback } from './summary.js';
 
 export interface SourceRow {
@@ -178,6 +179,7 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
   for (const id of ids) { const cid = clustered(id); if (cid) clusters.add(cid); } // corrected articles: let AI summaries regenerate when available
   // 2. AI classification/summaries for anything not yet analysed at its current content hash.
   let aiCount = 0;
+  const analyzedIds: number[] = [];
   if (ai?.canCall()) {
     const pending = db.prepare(`SELECT a.id, a.publisher, a.title, a.excerpt, a.published_at, a.content_hash, s.categories AS src_categories FROM articles a JOIN sources s ON s.id = a.source_id
       WHERE (a.ai_content_hash IS NULL OR a.ai_content_hash != a.content_hash) AND a.published_at >= ? ORDER BY a.published_at DESC LIMIT 60`).all(Date.now() - 14 * 86_400_000) as any[];
@@ -186,7 +188,7 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
     const result = await ai.analyzeArticles(inputs, cats);
     const setAi = db.prepare(`UPDATE articles SET ai_category=?, importance=?, ai_content_hash=content_hash, summary=COALESCE(?, summary), summary_kind=CASE WHEN ? IS NOT NULL THEN 'ai' ELSE summary_kind END WHERE id=?`);
     db.transaction(() => {
-      for (const [id, a] of result) { setAi.run(a.category, a.importance, a.summary, a.summary, id); aiCount++; const cid = (db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id; if (cid) clusters.add(cid); }
+      for (const [id, a] of result) { setAi.run(a.category, a.importance, a.summary, a.summary, id); aiCount++; analyzedIds.push(id); const cid = (db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id; if (cid) clusters.add(cid); }
     })();
   }
   // Repair/upgrade recent grouped stories that still lack a usable summary or were never judged for an AI summary (bounded per refresh).
@@ -199,6 +201,8 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
   for (const cid of clusters) recomputeCluster(db, cid);
   await summarizeClusters(deps, clusters);
   indexArticleTopics(db, todo);
+  // Hard exclusions: match new/changed articles, and re-match freshly classified ones (a blocked topic may name categories). Local only, no extra AI request.
+  indexArticleBlocks(db, [...new Set([...todo, ...analyzedIds])]);
   return { ai: aiCount, clusters: clusters.size };
 }
 

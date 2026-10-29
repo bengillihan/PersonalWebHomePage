@@ -3,6 +3,7 @@ export interface Story {
   id: number; title: string; summary: string | null; summaryKind: 'ai' | 'excerpt' | 'headline' | null; differences: string | null;
   category: string | null; importance: number; publishedAt: number; updatedAt: number; sourceCount: number;
   isRead: boolean; isUpdated: boolean; bookmarked: boolean; rating: number; imageUrl: string | null;
+  blockedBy: string[];
   primary: { publisher: string; url: string; aggregated: boolean } | null;
   articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[] }[];
   why?: { score: number; parts: Record<string, number>; reasons: string[]; bucket: string };
@@ -17,6 +18,7 @@ export interface Source {
   enabled: boolean; coverage: 'comprehensive' | 'interest'; categories: string[]; isLocal: boolean; health: 'unknown' | 'ok' | 'stale' | 'error' | 'disabled'; statusReason: string | null; freshnessHours: number | null; freshnessDefaultHours: number;
   lastCheckedAt: number | null; lastSuccessAt: number | null; lastItemAt: number | null; lastError: string | null; articleCount: number;
 }
+export interface BlockedTopic { id: number; name: string; description: string; keywords: string[]; categories: string[]; enabled: boolean; seeded: boolean; blockedArticles: number }
 export interface Topic { id: number; name: string; kind: 'category' | 'interest'; description: string; priority: 'high' | 'normal' | 'low'; include: string[]; exclude: string[] }
 export interface Prefs {
   weights: { interests: number; importance: number; recency: number; source: number; feedback: number };

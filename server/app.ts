@@ -19,6 +19,7 @@ import { registerApi } from './routes/api.js';
 import { checkPersistence, type PersistenceReport } from './storage.js';
 import { Weather, type WeatherOptions } from './weather/weather.js';
 import { registerWeather } from './routes/weather.js';
+import { registerBlocked } from './routes/blocked.js';
 import { FetchError } from './net/safeFetch.js';
 import { redactUrl, scrubSecrets } from './logging.js';
 
@@ -47,6 +48,7 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
 
   registerAuth(app, cfg, db, oidc);
   registerApi(app, { cfg, db, ai, refresher, market, provider, fetchOpts: o.fetchOpts, persistence: o.persistence ?? checkPersistence({ sqlitePath: cfg.sqlitePath, required: false, allowEphemeral: false, volumePath: cfg.persistentVolumePath }) });
+  registerBlocked(app, db);
   registerWeather(app, new Weather(db, { fetchOpts: o.fetchOpts, ...o.weather }));
 
   // Optional external trigger (e.g. a Railway cron service calling curl). Off unless CRON_TOKEN (>=32 chars) is set.

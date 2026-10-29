@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, fullDate, timeAgo } from '../api';
-import type { Prefs, Quote, Source, Story, Topic } from '../types';
+import type { BlockedTopic, Prefs, Quote, Source, Story, Topic } from '../types';
 import StoryCard from './StoryCard';
 
 export const PANELS: [string, string][] = [['sources', 'Sources'], ['interests', 'Interests'], ['watchlist', 'Watchlist'], ['saved', 'Saved'], ['preferences', 'Preferences'], ['diagnostics', 'Diagnostics']];
@@ -120,6 +120,56 @@ function Interests({ onChanged }: { onChanged: () => void }) {
         </div>
       ))}
       {data?.length === 0 && <p className="text-sm text-slate-500">No interests yet. Without them “For You” leans on major stories, recency and your feedback.</p>}
+      <BlockedTopics onChanged={onChanged} />
+    </div>
+  );
+}
+
+/** "Not interested": hard exclusions, separate from thumbs-down. Describe what you don't want in plain language; matching is local and instant. */
+function BlockedTopics({ onChanged }: { onChanged: () => void }) {
+  const { data, reload } = useLoad<BlockedTopic[]>('/api/blocked-topics');
+  const [form, setForm] = useState({ name: '', description: '' });
+  const [editing, setEditing] = useState<{ id: number; name: string; description: string; keywords: string } | null>(null);
+  const [preview, setPreview] = useState<{ keywords: string[]; matches: number; samples: { title: string; publisher: string }[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const done = async () => { await reload(); onChanged(); };
+  const run = async (fn: () => Promise<unknown>) => { setErr(null); try { await fn(); await done(); return true; } catch (e) { setErr((e as Error).message); return false; } };
+  const showPreview = async (description: string) => { try { setPreview(await api('/api/blocked-topics/preview', { method: 'POST', body: { description } })); } catch (e) { setErr((e as Error).message); } };
+  return (
+    <div className="space-y-3 border-t border-slate-200 pt-5 dark:border-slate-800">
+      <div><h3 className="text-base font-semibold">Not interested</h3>
+        <p className="text-sm text-slate-500">Stories about these topics are hidden from For You, Latest, Local, Explore, Unread and category tabs, even from general news sources. They are kept: search and Saved still find them. A story stays visible if another article about it is about something else.</p></div>
+      <div className="card space-y-3 p-4">
+        <div className="grid gap-3 sm:grid-cols-3"><Field label="Name"><input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Cricket" /></Field>
+          <div className="sm:col-span-2"><Field label="What don’t you want to see? (plain language)"><input className="input" value={form.description} onChange={(e) => { setForm({ ...form, description: e.target.value }); setPreview(null); }} placeholder="cricket, IPL, test match" /></Field></div></div>
+        {preview && <p className="text-sm text-slate-600 dark:text-slate-300">{preview.keywords.length ? <>Matching: <b>{preview.keywords.join(', ')}</b>. </> : <span className="text-amber-700 dark:text-amber-300">No specific words found; add a few. </span>}Would hide <b>{preview.matches}</b> recent {preview.matches === 1 ? 'story' : 'stories'}{preview.samples.length > 0 && <> — e.g. “{preview.samples.map((s) => s.title).join('”, “')}”</>}.</p>}
+        {err && <p className="text-sm text-red-600" role="alert">{err}</p>}
+        <div className="flex gap-2"><button className="btn btn-outline" disabled={!form.description.trim()} onClick={() => showPreview(form.description)}>Preview</button>
+          <button className="btn btn-primary" disabled={!form.name.trim() || !form.description.trim()} onClick={async () => { if (await run(() => api('/api/blocked-topics', { method: 'POST', body: form }))) { setForm({ name: '', description: '' }); setPreview(null); } }}>Block topic</button></div>
+      </div>
+      {data?.map((t) => (
+        <div key={t.id} className={`card p-4 ${t.enabled ? '' : 'opacity-60'}`}>
+          {editing?.id === t.id ? (
+            <div className="space-y-2">
+              <Field label="Name"><input className="input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
+              <Field label="Description (plain language)"><input className="input" value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></Field>
+              <Field label="Words and phrases matched (comma separated)" hint="One of these in the headline, or two different ones in the text, hides an article. A single passing mention does not."><textarea className="input" rows={3} value={editing.keywords} onChange={(e) => setEditing({ ...editing, keywords: e.target.value })} /></Field>
+              <div className="flex gap-2"><button className="btn btn-primary" onClick={async () => { if (await run(() => api(`/api/blocked-topics/${t.id}`, { method: 'PUT', body: { name: editing.name, description: editing.description, keywords: csv(editing.keywords), categories: t.categories } }))) setEditing(null); }}>Save</button><button className="btn btn-ghost" onClick={() => setEditing(null)}>Cancel</button></div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-semibold">{t.name}</span>{t.seeded && <span className="chip">starter</span>}<span className="chip">{t.blockedArticles} {t.blockedArticles === 1 ? 'article' : 'articles'} matched</span></div>
+                {t.description && <p className="mt-1 text-sm">{t.description}</p>}
+                <p className="mt-1 break-words text-xs text-slate-500">{t.keywords.length > 0 && <>Matches: {t.keywords.join(', ')}. </>}{t.categories.length > 0 && <>Classified as: {t.categories.join(', ')}.</>}</p></div>
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={t.enabled} onChange={(e) => run(() => api(`/api/blocked-topics/${t.id}`, { method: 'PATCH', body: { enabled: e.target.checked } }))} />Blocking</label>
+                <button className="btn btn-outline" onClick={() => setEditing({ id: t.id, name: t.name, description: t.description, keywords: t.keywords.join(', ') })}>Edit</button>
+                <button className="btn btn-ghost !text-rose-600" onClick={() => { if (confirm(`Stop blocking “${t.name}”? Its stories will reappear.`)) void run(() => api(`/api/blocked-topics/${t.id}`, { method: 'DELETE' })); }}>Delete</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
