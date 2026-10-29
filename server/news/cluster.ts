@@ -116,11 +116,57 @@ export function ungroupArticle(db: DB, articleId: number): number {
   return fresh;
 }
 
-/** Manual merge of several clusters into the first. */
+/**
+ * Folds the user state of `others` into `target`. Must run BEFORE the obsolete clusters are deleted, because
+ * bookmarks / feedback / reading_state / feedback_sources all cascade-delete with their cluster.
+ *
+ * Conflict rules:
+ *  - bookmark: saved if ANY cluster was saved; keeps the earliest created_at.
+ *  - read: read only if EVERY cluster was read (unread wins, so nothing new is buried); read_at = latest of them.
+ *    The merge also bumps updated_at, so a fully read story shows "Updated".
+ *  - hidden: hidden only if EVERY cluster was hidden (hiding one part must not bury the rest).
+ *  - feedback (one row per cluster): the most recently updated rating wins. Equal ratings are combined
+ *    (earliest created_at, any recorded reason, union of rated publishers); a losing opposite rating is dropped.
+ *    No per-rating history is kept, so the dropped opposite rating is not recoverable.
+ */
+function transferUserState(db: DB, target: number, others: number[]): void {
+  const all = [target, ...others];
+  const marks = all.map(() => '?').join(',');
+
+  const bm = db.prepare(`SELECT MIN(created_at) AS t FROM bookmarks WHERE cluster_id IN (${marks})`).get(...all) as { t: number | null };
+  if (bm.t !== null) db.prepare('INSERT OR REPLACE INTO bookmarks (cluster_id, created_at) VALUES (?, ?)').run(target, bm.t);
+
+  const rs = db.prepare(`SELECT read_at, hidden_at FROM reading_state WHERE cluster_id IN (${marks})`).all(...all) as { read_at: number | null; hidden_at: number | null }[];
+  const everyone = (col: 'read_at' | 'hidden_at') => (rs.length === all.length && rs.every((r) => r[col] !== null) ? Math.max(...rs.map((r) => r[col]!)) : null);
+  const readAt = everyone('read_at'), hiddenAt = everyone('hidden_at');
+  if (readAt !== null || hiddenAt !== null || rs.length) {
+    db.prepare(`INSERT INTO reading_state (cluster_id, read_at, hidden_at) VALUES (?,?,?)
+      ON CONFLICT(cluster_id) DO UPDATE SET read_at = excluded.read_at, hidden_at = excluded.hidden_at`).run(target, readAt, hiddenAt);
+  }
+
+  const fb = db.prepare(`SELECT * FROM feedback WHERE cluster_id IN (${marks}) ORDER BY updated_at DESC, cluster_id`).all(...all) as
+    { cluster_id: number; rating: number; reason: string | null; category: string | null; created_at: number; updated_at: number }[];
+  if (fb.length) {
+    const winner = fb[0];
+    const same = fb.filter((f) => f.rating === winner.rating);
+    const sources = db.prepare(`SELECT DISTINCT source_id FROM feedback_sources WHERE cluster_id IN (${same.map(() => '?').join(',')})`).all(...same.map((f) => f.cluster_id)) as { source_id: number }[];
+    db.prepare('DELETE FROM feedback WHERE cluster_id = ?').run(target);
+    db.prepare('DELETE FROM feedback_sources WHERE cluster_id = ?').run(target);
+    db.prepare('INSERT INTO feedback (cluster_id, rating, reason, category, created_at, updated_at) VALUES (?,?,?,?,?,?)').run(
+      target, winner.rating, winner.reason ?? same.find((f) => f.reason)?.reason ?? null, winner.category,
+      Math.min(...same.map((f) => f.created_at)), winner.updated_at);
+    for (const s of sources) db.prepare('INSERT OR IGNORE INTO feedback_sources (cluster_id, source_id) VALUES (?,?)').run(target, s.source_id);
+  }
+}
+
+/** Manual merge of several clusters into the first. Atomic: user state moves to the survivor before the others are deleted. */
 export function mergeClusters(db: DB, clusterIds: number[]): number {
-  const [target, ...rest] = clusterIds;
+  const [target, ...rest] = [...new Set(clusterIds)]; // a repeated id must never be treated as "another" cluster to delete
   if (!target || !rest.length) throw new Error('Need at least two clusters');
   db.transaction(() => {
+    const found = (db.prepare(`SELECT id FROM story_clusters WHERE id IN (${[target, ...rest].map(() => '?').join(',')})`).all(target, ...rest) as { id: number }[]).length;
+    if (found !== rest.length + 1) throw new Error('Cluster not found');
+    transferUserState(db, target, rest);
     for (const from of rest) {
       for (const m of db.prepare('SELECT id FROM articles WHERE cluster_id = ?').all(from) as { id: number }[]) {
         moveArticle(db, m.id, target, 1);
