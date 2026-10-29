@@ -54,7 +54,7 @@ export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false)
   const rank = (m: any) => (m.summary_kind === 'ai' ? 2 : m.summary_kind === 'excerpt' ? 1 : 0) * 10 + m.priority * 3;
   const ordered = [...members].sort((a, b) => rank(b) - rank(a) || a.published_at - b.published_at);
   const primary = ordered[0];
-  const pubs = new Set(members.map((m) => m.publisher));
+  const pubs = new Set(members.map((m) => String(m.publisher).trim().toLowerCase())); // distinct publishers, never feed entries
   const cur = db.prepare('SELECT * FROM story_clusters WHERE id = ?').get(clusterId) as any;
   if (!cur) return;
   const next = {

@@ -9,7 +9,7 @@ export interface StoryDto {
   category: string | null; importance: number; publishedAt: number; updatedAt: number; sourceCount: number;
   isRead: boolean; isUpdated: boolean; bookmarked: boolean; rating: number; imageUrl: string | null;
   primary: { publisher: string; url: string; aggregated: boolean } | null;
-  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean }[];
+  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[] }[];
   why?: { score: number; parts: Record<string, number>; reasons: string[]; bucket: string };
 }
 export interface FeedPage { items: StoryDto[]; nextCursor: string | null; total?: number }
@@ -118,6 +118,10 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>): StoryDto[] {
   const marks = ids.map(() => '?').join(',');
   const arts = db.prepare(`SELECT a.id, a.cluster_id, a.publisher, a.title, a.url, a.published_at, a.image_url, s.kind FROM articles a JOIN sources s ON s.id = a.source_id
     WHERE a.cluster_id IN (${marks}) ORDER BY a.published_at ASC`).all(...ids) as any[];
+  // Other feeds that carried the very same article (the originating publisher is unchanged; this is only 'also via').
+  const via = new Map<number, string[]>();
+  for (const v of db.prepare(`SELECT x.article_id, s.name FROM article_sources x JOIN articles a ON a.id = x.article_id JOIN sources s ON s.id = x.source_id
+    WHERE a.cluster_id IN (${marks}) AND x.source_id != a.source_id ORDER BY s.name`).all(...ids) as { article_id: number; name: string }[]) (via.get(v.article_id) ?? via.set(v.article_id, []).get(v.article_id)!).push(v.name);
   const by = new Map<number, any[]>();
   for (const a of arts) (by.get(a.cluster_id) ?? by.set(a.cluster_id, []).get(a.cluster_id)!).push(a);
   return rows.map((r) => {
@@ -130,7 +134,7 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>): StoryDto[] {
       isRead: !!r.read_at, isUpdated: !!r.read_at && r.updated_at > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
       imageUrl: prim?.image_url ?? null,
       primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator' } : null,
-      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator' })),
+      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [] })),
       ...(w ? { why: { score: w.score, parts: w.parts as any, reasons: w.reasons, bucket: w.bucket } } : {}),
     };
   });

@@ -100,6 +100,7 @@ export default function StoryCard({ story, showImages, onChange, onGone }: { sto
               <span className="font-medium">{a.publisher}</span>
               <a className="text-indigo-700 hover:underline dark:text-indigo-300" href={a.url} target="_blank" rel="noopener noreferrer">{a.title}</a>
               <span className="text-xs text-slate-400">{timeAgo(a.publishedAt)}</span>
+              {a.alsoVia.length > 0 && <span className="text-xs text-slate-400" title="Other feeds that carried this same article">also via {a.alsoVia.join(', ')}</span>}
               <button className="text-xs text-slate-400 underline hover:text-slate-600" onClick={() => api(`/api/stories/${story.id}/ungroup`, { method: 'POST', body: { articleId: a.id } }).then(() => onGone(-1))}>ungroup</button>
             </li>
           ))}

@@ -29,7 +29,7 @@ async function pool<T>(items: T[], limit: number, fn: (x: T) => Promise<void>) {
 
 function domainOf(q: string | null): string | null { return q?.match(/site:([^\s/]+)/)?.[1]?.replace(/^www\./, '') ?? null; }
 
-interface ExistingArticle { id: number; title: string; excerpt: string | null; content_hash: string; cluster_id: number | null; summary: string | null; summary_kind: string | null; ai_content_hash: string | null }
+interface ExistingArticle { id: number; source_id: number; title: string; excerpt: string | null; content_hash: string; cluster_id: number | null; summary: string | null; summary_kind: string | null; ai_content_hash: string | null }
 
 /** Wording of the story with case, punctuation, whitespace, accents and feed boilerplate removed. Equal keys = cosmetic edit only. */
 export function materialKey(title: string, excerpt: string | null): string {
@@ -94,7 +94,8 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
     const domain = s.kind === 'aggregator' ? domainOf(s.aggregator_query) : null;
     const ids: number[] = [];
     const seen = new Set<string>(); // in-batch duplicates (same canonical URL twice in one feed)
-    const find = db.prepare('SELECT id, title, excerpt, content_hash, cluster_id, summary, summary_kind, ai_content_hash FROM articles WHERE canonical_hash = ?');
+    const find = db.prepare('SELECT id, source_id, title, excerpt, content_hash, cluster_id, summary, summary_kind, ai_content_hash FROM articles WHERE canonical_hash = ?');
+    const link = db.prepare('INSERT OR IGNORE INTO article_sources (article_id, source_id, first_seen_at) VALUES (?,?,?)'); // every feed that carries an article
     const insert = db.prepare(`INSERT INTO articles (source_id, guid, url, canonical_url, canonical_hash, publisher, title, title_norm, excerpt, image_url, published_at, fetched_at, content_hash, availability, importance)
       VALUES (@source_id,@guid,@url,@canonical_url,@canonical_hash,@publisher,@title,@title_norm,@excerpt,@image_url,@published_at,@fetched_at,@content_hash,@availability,@importance)`);
     db.transaction(() => {
@@ -113,7 +114,11 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
         const contentHash = sha256(`${item.title}\n${item.excerpt ?? ''}`);
         const existing = find.get(hash) as ExistingArticle | undefined;
         if (existing) {
-          if (existing.content_hash !== contentHash && applyCorrection(db, existing, item, contentHash)) ids.push(existing.id); // only material changes need AI
+          // Exact duplicate (same canonical URL): no new article, no AI. Just remember this feed carries it. Only the feed that
+          // first discovered the article may correct its text; another feed's differing excerpt must not overwrite it (it would
+          // flip-flop on every refresh and re-queue the article for Gemini each time).
+          link.run(existing.id, s.id, now);
+          if (existing.source_id === s.id && existing.content_hash !== contentHash && applyCorrection(db, existing, item, contentHash)) ids.push(existing.id); // only material changes need AI
           continue;
         }
         // Heuristic until Gemini scores it: feeds list top stories first, so early items from general (non-local) sources count as major.
@@ -124,6 +129,7 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
           title: item.title, title_norm: normalizeTitle(item.title), excerpt: item.excerpt, image_url: item.imageUrl,
           published_at: item.publishedAt, fetched_at: now, content_hash: contentHash, availability: item.excerpt ? 'excerpt' : 'headline_only', importance,
         });
+        link.run(Number(r.lastInsertRowid), s.id, now);
         ids.push(Number(r.lastInsertRowid));
       }
     })();

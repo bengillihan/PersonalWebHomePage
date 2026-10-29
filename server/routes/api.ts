@@ -146,7 +146,17 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     if (sets.length) db.prepare(`UPDATE sources SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
     return { ok: true };
   });
-  app.delete('/api/sources/:id', async (req) => { const { id } = idParam.parse(req.params); db.prepare('DELETE FROM sources WHERE id = ?').run(id); db.prepare('DELETE FROM story_clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM articles WHERE cluster_id IS NOT NULL)').run(); return { ok: true }; });
+  app.delete('/api/sources/:id', async (req) => {
+    const { id } = idParam.parse(req.params);
+    db.transaction(() => {
+      // Articles that another feed also carries survive: hand them to a remaining feed before the cascade removes this feed's own articles.
+      db.prepare(`UPDATE articles SET source_id = (SELECT MIN(x.source_id) FROM article_sources x WHERE x.article_id = articles.id AND x.source_id != @id)
+        WHERE source_id = @id AND EXISTS (SELECT 1 FROM article_sources x WHERE x.article_id = articles.id AND x.source_id != @id)`).run({ id });
+      db.prepare('DELETE FROM sources WHERE id = ?').run(id);
+      db.prepare('DELETE FROM story_clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM articles WHERE cluster_id IS NOT NULL)').run();
+    })();
+    return { ok: true };
+  });
   app.post('/api/sources/:id/check', medium, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const s = db.prepare('SELECT * FROM sources WHERE id = ?').get(id) as SourceRow | undefined;

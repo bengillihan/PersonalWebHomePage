@@ -196,4 +196,20 @@ CREATE TABLE ai_usage (
 );
 `,
   },
+  {
+    id: 2,
+    name: 'article_sources',
+    // Which feeds carried each article. articles.source_id stays the feed that first discovered it (with articles.publisher as the
+    // originating publisher); this table additionally records every other feed that supplied the same canonical URL.
+    sql: `
+CREATE TABLE article_sources (
+  article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  first_seen_at INTEGER NOT NULL,
+  PRIMARY KEY (article_id, source_id)
+) WITHOUT ROWID;
+CREATE INDEX idx_article_sources_source ON article_sources(source_id);
+INSERT INTO article_sources (article_id, source_id, first_seen_at) SELECT id, source_id, fetched_at FROM articles;
+`,
+  },
 ];
