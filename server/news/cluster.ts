@@ -1,6 +1,7 @@
 import type { DB } from '../db.js';
 import { BASE_CATEGORIES, type Ai } from '../ai/gemini.js';
 import { entities, jaccard, sha256, tokens } from './normalize.js';
+import { contradicts } from './contradiction.js';
 
 export const MERGE_THRESHOLD = 0.55;
 export const UNCERTAIN_THRESHOLD = 0.36;
@@ -119,6 +120,11 @@ function refreshClusterSummary(db: DB, cur: any, ordered: any[]): void {
   db.prepare('UPDATE story_clusters SET summary=?, summary_kind=?, differences=NULL, summary_hash=? WHERE id=?').run(summary, kind, marker, cur.id);
 }
 
+/** True if any article already in the story makes a claim opposite to this headline. */
+function storyContradicts(db: DB, clusterId: number, title: string): boolean {
+  return (db.prepare('SELECT title FROM articles WHERE cluster_id = ?').all(clusterId) as { title: string }[]).some((m) => contradicts(title, m.title));
+}
+
 /**
  * Assigns each new article to an existing cluster, or creates a singleton. Returns touched cluster ids.
  *
@@ -145,8 +151,11 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
       let best = { score: 0, clusterId: 0, other: null as any };
       for (const c of cands.all(id, art.published_at - WINDOW_MS, art.published_at + WINDOW_MS) as any[]) {
         const s = headlineSimilarity(art.title, c.title);
+        if (s >= UNCERTAIN_THRESHOLD && contradicts(art.title, c.title)) continue; // similar wording, opposite claim: never a candidate, local or AI
         if (s > best.score) best = { score: s, clusterId: c.cluster_id, other: c };
       }
+      // One article of that story may contradict even though the closest one does not: check the whole story.
+      if (best.score >= UNCERTAIN_THRESHOLD && storyContradicts(db, best.clusterId, art.title)) best = { score: 0, clusterId: 0, other: null };
       if (best.score >= MERGE_THRESHOLD) {
         moveArticle(db, id, best.clusterId); touched.add(best.clusterId);
         recomputeCluster(db, best.clusterId, true);
@@ -171,6 +180,9 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
         const target = (db.prepare('SELECT cluster_id FROM articles WHERE id = ?').get(u.otherArticleId) as { cluster_id: number | null } | undefined)?.cluster_id;
         if (!target || target === mine.cluster_id) continue; // the matched article is gone, unclustered, or already in the same story
         if (!db.prepare('SELECT 1 FROM story_clusters WHERE id = ?').get(target)) continue;
+        // The model only said the two are about the same event; it cannot tell that the target story has since gained an opposing report.
+        const myTitle = (db.prepare('SELECT title FROM articles WHERE id = ?').get(u.articleId) as { title: string }).title;
+        if (storyContradicts(db, target, myTitle)) continue;
         // Moving the LAST article out of a story deletes that story, and everything the user attached to it (bookmark, rating, rated publishers,
         // read/hidden) would cascade away with it, including anything done while the model was thinking. Carry it to the target first, with the same
         // rules as a manual merge, in this same transaction (state transfer, move and deletion succeed or fail together).
