@@ -1,12 +1,12 @@
 import type { DB } from '../db.js';
 import { getSetting, setSetting } from '../db.js';
 import type { Ai, ArticleInput } from '../ai/gemini.js';
-import { BASE_CATEGORIES } from '../ai/gemini.js';
+import { BASE_CATEGORIES, MIN_CLUSTER_EXCERPT } from '../ai/gemini.js';
 import { fetchWithRetry } from '../net/safeFetch.js';
 import { getPrefs } from '../settings.js';
 import { assessFreshness, cleanAggregatorItem, googleNewsFeedUrl, itemOnDomain, parseFeed, type FeedItem } from './feed.js';
 import { canonicalizeUrl, normalizeTitle, sha1, sha256 } from './normalize.js';
-import { clusterArticles, recomputeCluster } from './cluster.js';
+import { clusterArticles, clusterContentHash, isUsableSummary, recomputeCluster } from './cluster.js';
 import { indexArticleTopics, loadTopics } from './topics.js';
 import { sentencesFallback } from './summary.js';
 
@@ -54,8 +54,13 @@ function applyCorrection(db: DB, ex: ExistingArticle, item: FeedItem, contentHas
   const summary = keepAi ? ex.summary : fb.text;
   const kind = keepAi ? 'ai' : fb.kind;
   const aiHash = !material && ex.ai_content_hash === ex.content_hash ? contentHash : ex.ai_content_hash;
+  const hashes = () => (ex.cluster_id ? (db.prepare('SELECT content_hash FROM articles WHERE cluster_id=?').all(ex.cluster_id) as { content_hash: string }[]).map((r) => r.content_hash) : []);
+  const clusterHashBefore = clusterContentHash(hashes());
   db.prepare('UPDATE articles SET title=?, title_norm=?, excerpt=?, content_hash=?, availability=?, summary=?, summary_kind=?, ai_content_hash=? WHERE id=?')
     .run(item.title, normalizeTitle(item.title), item.excerpt, contentHash, item.excerpt ? 'excerpt' : 'headline_only', summary, kind, aiHash, ex.id);
+  if (ex.cluster_id && !material) { // cosmetic edit: the consolidated summary is still valid, so move its content marker instead of discarding it
+    db.prepare('UPDATE story_clusters SET summary_hash=? WHERE id=? AND summary_hash=?').run(clusterContentHash(hashes()), ex.cluster_id, clusterHashBefore);
+  }
   if (ex.cluster_id) {
     recomputeCluster(db, ex.cluster_id, material); // refreshes title/primary; single-article clusters also take the new summary
     if (material) { // a consolidated multi-source summary was written from the old text: fall back to the primary's summary until AI regenerates it
@@ -157,24 +162,38 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
       for (const [id, a] of result) { setAi.run(a.category, a.importance, a.summary, a.summary, id); aiCount++; const cid = (db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id; if (cid) clusters.add(cid); }
     })();
   }
+  // Repair/upgrade recent grouped stories that still lack a usable summary or were never judged for an AI summary (bounded per refresh).
+  const needSummary = db.prepare(`SELECT id FROM story_clusters WHERE article_count > 1 AND last_published_at >= ?
+    AND (summary IS NULL OR TRIM(summary) = '' OR summary_hash IS NULL) ORDER BY last_published_at DESC LIMIT 10`).all(Date.now() - 7 * 86_400_000) as { id: number }[];
+  for (const r of needSummary) clusters.add(r.id);
   for (const cid of clusters) recomputeCluster(db, cid);
   await summarizeClusters(deps, clusters);
   indexArticleTopics(db, ids);
   return { ai: aiCount, clusters: clusters.size };
 }
 
-/** Consolidated multi-source summaries; regenerated only when the member content hashes change. */
+/**
+ * Consolidated multi-source summaries from Gemini. Skips a cluster whose summary is already current for its content
+ * (summary_hash), asks at most once per distinct content, and never asks without >=2 usable excerpts. On any Gemini failure
+ * the local publisher-excerpt summary stays and we stop for this run (no hammering); a later refresh retries.
+ */
 export async function summarizeClusters(deps: IngestDeps, clusterIds: Iterable<number>): Promise<void> {
   const { db, ai } = deps;
   for (const cid of clusterIds) {
     const members = db.prepare('SELECT id, publisher, title, excerpt, published_at, content_hash FROM articles WHERE cluster_id=?').all(cid) as any[];
     if (members.length < 2) continue;
-    const hash = sha256(members.map((m) => m.content_hash).sort().join(','));
-    const cur = db.prepare('SELECT summary_hash, summary_kind FROM story_clusters WHERE id=?').get(cid) as any;
-    if (!cur || cur.summary_hash === hash) continue;
-    if (!ai?.canCall()) continue;
+    const hash = clusterContentHash(members.map((m) => m.content_hash));
+    const cur = db.prepare('SELECT summary, summary_hash, summary_kind FROM story_clusters WHERE id=?').get(cid) as any;
+    if (!cur) continue;
+    if (cur.summary_hash === hash && (cur.summary_kind !== 'ai' || isUsableSummary(cur.summary))) continue; // current, or already judged
+    if (members.filter((m) => (m.excerpt?.length ?? 0) >= MIN_CLUSTER_EXCERPT).length < 2) { // not enough source text to consolidate
+      db.prepare('UPDATE story_clusters SET summary_hash=? WHERE id=?').run(hash, cid);
+      continue;
+    }
+    if (!ai?.enabled) continue;
     const res = await ai.summarizeCluster(members.map((m) => ({ id: m.id, publisher: m.publisher, title: m.title, excerpt: m.excerpt, publishedAt: m.published_at, contentHash: m.content_hash })));
-    if (res) db.prepare("UPDATE story_clusters SET summary=?, differences=?, summary_kind='ai', summary_hash=? WHERE id=?").run(res.summary, res.differences, hash, cid);
+    if (!res) break;
+    db.prepare("UPDATE story_clusters SET summary=?, differences=?, summary_kind='ai', summary_hash=? WHERE id=?").run(res.summary, res.differences, hash, cid);
   }
 }
 

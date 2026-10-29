@@ -1,6 +1,6 @@
 import type { DB } from '../db.js';
 import type { Ai } from '../ai/gemini.js';
-import { entities, jaccard, tokens } from './normalize.js';
+import { entities, jaccard, sha256, tokens } from './normalize.js';
 
 export const MERGE_THRESHOLD = 0.55;
 export const UNCERTAIN_THRESHOLD = 0.36;
@@ -40,23 +40,56 @@ function moveArticle(db: DB, articleId: number, to: number, manual = 0) {
   return from;
 }
 
-/** Recomputes derived cluster fields from members. Deletes the cluster if empty. */
+/** A summary is usable only if it has real text, not merely a row/NULL/blank. */
+export const isUsableSummary = (s: string | null | undefined): s is string => typeof s === 'string' && s.trim().length >= 20;
+
+/** Identifies the exact member content a consolidated summary was written from. Order-independent. */
+export function clusterContentHash(contentHashes: string[]): string { return sha256([...contentHashes].sort().join(',')); }
+
+/** Recomputes derived cluster fields from members. Deletes the cluster if empty. Writes only when something changed. */
 export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false): void {
-  const members = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.importance, a.ai_category, a.summary, a.summary_kind, s.priority
+  const members = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.importance, a.ai_category, a.summary, a.summary_kind, a.content_hash, s.priority
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.cluster_id = ?`).all(clusterId) as any[];
   if (!members.length) { db.prepare('DELETE FROM story_clusters WHERE id = ?').run(clusterId); return; }
   const rank = (m: any) => (m.summary_kind === 'ai' ? 2 : m.summary_kind === 'excerpt' ? 1 : 0) * 10 + m.priority * 3;
-  const primary = [...members].sort((a, b) => rank(b) - rank(a) || a.published_at - b.published_at)[0];
+  const ordered = [...members].sort((a, b) => rank(b) - rank(a) || a.published_at - b.published_at);
+  const primary = ordered[0];
   const pubs = new Set(members.map((m) => m.publisher));
-  const importance = Math.min(1, Math.max(...members.map((m) => m.importance ?? 0.3)) + 0.04 * (pubs.size - 1));
-  db.prepare(`UPDATE story_clusters SET primary_article_id=?, title=?, category=?, importance=?, article_count=?, source_count=?,
-    first_published_at=?, last_published_at=? WHERE id=?`)
-    .run(primary.id, primary.title, primary.ai_category, importance, members.length, pubs.size,
-      Math.min(...members.map((m) => m.published_at)), Math.max(...members.map((m) => m.published_at)), clusterId);
-  if (members.length === 1 || !db.prepare('SELECT summary FROM story_clusters WHERE id = ?').get(clusterId)) {
-    db.prepare('UPDATE story_clusters SET summary=?, summary_kind=?, differences=NULL, summary_hash=NULL WHERE id=?').run(primary.summary, primary.summary_kind, clusterId);
+  const cur = db.prepare('SELECT * FROM story_clusters WHERE id = ?').get(clusterId) as any;
+  if (!cur) return;
+  const next = {
+    primary_article_id: primary.id, title: primary.title, category: primary.ai_category,
+    importance: Math.min(1, Math.max(...members.map((m) => m.importance ?? 0.3)) + 0.04 * (pubs.size - 1)),
+    article_count: members.length, source_count: pubs.size,
+    first_published_at: Math.min(...members.map((m) => m.published_at)), last_published_at: Math.max(...members.map((m) => m.published_at)),
+  };
+  if ((Object.keys(next) as (keyof typeof next)[]).some((k) => cur[k] !== next[k])) {
+    db.prepare(`UPDATE story_clusters SET primary_article_id=?, title=?, category=?, importance=?, article_count=?, source_count=?,
+      first_published_at=?, last_published_at=? WHERE id=?`).run(next.primary_article_id, next.title, next.category, next.importance, next.article_count, next.source_count, next.first_published_at, next.last_published_at, clusterId);
   }
+  refreshClusterSummary(db, cur, ordered);
   if (bumpUpdated) db.prepare('UPDATE story_clusters SET updated_at = ? WHERE id = ?').run(Date.now(), clusterId);
+}
+
+/**
+ * Keeps the cluster's displayed summary usable without any AI call.
+ *  - Single article: that article's summary.
+ *  - Several articles: a current AI consolidated summary is kept; otherwise the best usable publisher-derived summary among
+ *    the members (primary first), never text that is not in a source; if none has usable text the cluster is headline-only (NULL).
+ * The AI step (summarizeClusters) upgrades this later and is told not to re-ask via summary_hash.
+ */
+function refreshClusterSummary(db: DB, cur: any, ordered: any[]): void {
+  const hash = clusterContentHash(ordered.map((m) => m.content_hash));
+  let summary: string | null; let kind: string | null; let marker: string | null = null;
+  if (ordered.length === 1) { summary = ordered[0].summary; kind = ordered[0].summary_kind; }
+  else {
+    if (cur.summary_kind === 'ai' && cur.summary_hash === hash && isUsableSummary(cur.summary)) return; // current consolidated summary
+    const src = ordered.find((m) => isUsableSummary(m.summary));
+    summary = src ? src.summary : null; kind = src ? src.summary_kind : 'headline';
+    if (cur.summary_kind !== 'ai' && cur.summary_hash === hash) marker = hash; // keep "already judged for this content"
+  }
+  if (cur.summary === summary && cur.summary_kind === kind && cur.differences === null && cur.summary_hash === marker) return;
+  db.prepare('UPDATE story_clusters SET summary=?, summary_kind=?, differences=NULL, summary_hash=? WHERE id=?').run(summary, kind, marker, cur.id);
 }
 
 /** Assigns each new article to an existing cluster, or creates a singleton. Returns touched cluster ids. */

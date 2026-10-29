@@ -5,6 +5,8 @@ import { getSetting } from '../db.js';
 import { sha256 } from '../news/normalize.js';
 
 export const PROMPT_VERSION = 'v1';
+/** Minimum excerpt length for an article to count as usable source text for a consolidated multi-source summary. */
+export const MIN_CLUSTER_EXCERPT = 80;
 export const BASE_CATEGORIES = ['Local', 'World', 'Business', 'Politics', 'Technology', 'Science', 'Health', 'Sports', 'Entertainment', 'Automotive', 'Other'];
 
 /** Rough list prices (USD per 1M tokens) used ONLY for the usage estimate shown in Diagnostics. Adjust in settings key ai_price. */
@@ -165,7 +167,7 @@ export class Ai {
     const hash = sha256(members.map((m) => m.contentHash).sort().join(','));
     const hit = this.cacheGet<{ summary: string; differences: string | null }>(this.key('cluster', hash));
     if (hit) return hit;
-    const usable = members.filter((m) => m.excerpt && m.excerpt.length >= 80);
+    const usable = members.filter((m) => m.excerpt && m.excerpt.length >= MIN_CLUSTER_EXCERPT);
     if (usable.length < 2) return null;
     const prompt = `These ${usable.length} articles cover the same event. Write a 2-4 sentence summary of the facts they agree on. Then, in "differences", briefly note meaningful differences, uncertainties or extra details and attribute them to the named publisher (null if none). Use only the text below; do not invent citations.\n\n` +
       usable.map((a) => `<article id="${a.id}" publisher="${fence(a.publisher, 80)}">\nTitle: ${fence(a.title, 300)}\nExcerpt: ${fence(a.excerpt, 700)}\n</article>`).join('\n');
