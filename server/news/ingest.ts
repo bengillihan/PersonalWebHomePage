@@ -186,9 +186,16 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
     const inputs: ArticleInput[] = pending.map((p) => ({ id: p.id, publisher: p.publisher, title: p.title, excerpt: p.excerpt, publishedAt: p.published_at, contentHash: p.content_hash, sourceHints: sectionHints(p.src_categories) }));
     const cats = [...new Set([...BASE_CATEGORIES, ...loadTopics(db).filter((t) => t.kind === 'category').map((t) => t.name)])];
     const result = await ai.analyzeArticles(inputs, cats);
-    const setAi = db.prepare(`UPDATE articles SET ai_category=?, importance=?, ai_content_hash=content_hash, summary=COALESCE(?, summary), summary_kind=CASE WHEN ? IS NOT NULL THEN 'ai' ELSE summary_kind END WHERE id=?`);
+    // The hash of the text each request was built from. A result is applied only if the article still has exactly that content: if a publisher
+    // correction landed while the model was working, the answer describes an older version and is discarded (the newer version stays unanalysed
+    // and is picked up by the next refresh). The stamp is the analysed hash, never whatever the hash happens to be now.
+    const analysedHash = new Map<number, string>(pending.map((p) => [p.id, p.content_hash as string]));
+    const setAi = db.prepare(`UPDATE articles SET ai_category=@cat, importance=@imp, ai_content_hash=@hash, summary=COALESCE(@sum, summary), summary_kind=CASE WHEN @sum IS NOT NULL THEN 'ai' ELSE summary_kind END WHERE id=@id AND content_hash=@hash`);
     db.transaction(() => {
-      for (const [id, a] of result) { setAi.run(a.category, a.importance, a.summary, a.summary, id); aiCount++; analyzedIds.push(id); const cid = (db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id; if (cid) clusters.add(cid); }
+      for (const [id, a] of result) {
+        const hash = analysedHash.get(id); if (!hash) continue;
+        if (setAi.run({ cat: a.category, imp: a.importance, sum: a.summary, hash, id }).changes === 0) continue; // stale: the article changed meanwhile
+        aiCount++; analyzedIds.push(id); const cid = (db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id; if (cid) clusters.add(cid); }
     })();
   }
   // Repair/upgrade recent grouped stories that still lack a usable summary or were never judged for an AI summary (bounded per refresh).
@@ -227,6 +234,10 @@ export async function summarizeClusters(deps: IngestDeps, clusterIds: Iterable<n
     if (!ai?.enabled) continue;
     const res = await ai.summarizeCluster(members.map((m) => ({ id: m.id, publisher: m.publisher, title: m.title, excerpt: m.excerpt, publishedAt: m.published_at, contentHash: m.content_hash })));
     if (!res) break;
+    // The summary was written from the members as they were when asked. If an article was corrected (or the story gained/lost one) meanwhile, it
+    // describes old content: discard it and let a later refresh summarize the current content.
+    const nowHash = clusterContentHash((db.prepare('SELECT content_hash FROM articles WHERE cluster_id=?').all(cid) as { content_hash: string }[]).map((r) => r.content_hash));
+    if (nowHash !== hash) continue;
     db.prepare("UPDATE story_clusters SET summary=?, differences=?, summary_kind='ai', summary_hash=? WHERE id=?").run(res.summary, res.differences, hash, cid);
   }
 }

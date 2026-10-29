@@ -131,9 +131,9 @@ function refreshClusterSummary(db: DB, cur: any, ordered: any[]): void {
  */
 export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[], maxAiPairs = 20): Promise<Set<number>> {
   const touched = new Set<number>();
-  const uncertain: { id: number; articleId: number; otherArticleId: number; a: any; b: any }[] = [];
-  const getArt = db.prepare('SELECT id, title, publisher, published_at FROM articles WHERE id = ?');
-  const cands = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.cluster_id FROM articles a
+  const uncertain: { id: number; articleId: number; otherArticleId: number; hashA: string; hashB: string; a: any; b: any }[] = [];
+  const getArt = db.prepare('SELECT id, title, publisher, published_at, content_hash FROM articles WHERE id = ?');
+  const cands = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.content_hash, a.cluster_id FROM articles a
     WHERE a.cluster_id IS NOT NULL AND a.id != ? AND a.published_at BETWEEN ? AND ?`);
   let pairId = 0;
   db.transaction(() => {
@@ -153,7 +153,7 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
       } else {
         const cid = createSingleton(db, id); touched.add(cid);
         if (best.score >= UNCERTAIN_THRESHOLD && ai?.canCall() && uncertain.length < maxAiPairs) {
-          uncertain.push({ id: ++pairId, articleId: id, otherArticleId: best.other.id, a: art, b: best.other });
+          uncertain.push({ id: ++pairId, articleId: id, otherArticleId: best.other.id, hashA: art.content_hash, hashB: best.other.content_hash, a: art, b: best.other });
         }
       }
     }
@@ -163,6 +163,9 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
     db.transaction(() => {
       for (const u of uncertain) {
         if (verdicts.get(u.id) !== true) continue; // unknown or false => keep separate
+        // The verdict is about the two headlines as they were when asked. If either article was corrected meanwhile, it no longer applies.
+        const now = db.prepare('SELECT id, content_hash FROM articles WHERE id IN (?, ?)').all(u.articleId, u.otherArticleId) as { id: number; content_hash: string }[];
+        if (now.length !== 2 || now.some((r) => r.content_hash !== (r.id === u.articleId ? u.hashA : u.hashB))) continue;
         const mine = db.prepare('SELECT cluster_id, cluster_locked FROM articles WHERE id = ?').get(u.articleId) as { cluster_id: number | null; cluster_locked: number } | undefined;
         if (!mine || mine.cluster_locked) continue;
         const target = (db.prepare('SELECT cluster_id FROM articles WHERE id = ?').get(u.otherArticleId) as { cluster_id: number | null } | undefined)?.cluster_id;
