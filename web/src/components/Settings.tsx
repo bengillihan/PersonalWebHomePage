@@ -11,7 +11,7 @@ const Field = ({ label, children, hint }: { label: string; children: ReactNode; 
 const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 const HEALTH: Record<string, string> = { ok: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200', stale: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200', error: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200', unknown: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' };
 
-export default function Settings({ panel, setPanel, onClose, onChanged }: { panel: string; setPanel: (p: string) => void; onClose: () => void; onChanged: () => void }) {
+export default function Settings({ panel, setPanel, onClose, onChanged, onTheme }: { panel: string; setPanel: (p: string) => void; onClose: () => void; onChanged: () => void; onTheme: (t: Prefs['theme']) => void }) {
   return (
     <div className="fixed inset-0 z-40 flex bg-slate-900/50" role="dialog" aria-modal="true" aria-label="Settings" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="m-0 flex h-full w-full flex-col bg-slate-50 dark:bg-slate-950 sm:m-4 sm:mx-auto sm:max-w-5xl sm:rounded-2xl sm:shadow-2xl">
@@ -27,7 +27,7 @@ export default function Settings({ panel, setPanel, onClose, onChanged }: { pane
             {panel === 'interests' && <Interests onChanged={onChanged} />}
             {panel === 'watchlist' && <Watchlist onChanged={onChanged} />}
             {panel === 'saved' && <Saved />}
-            {panel === 'preferences' && <Preferences onChanged={onChanged} />}
+            {panel === 'preferences' && <Preferences onChanged={onChanged} onTheme={onTheme} />}
             {panel === 'diagnostics' && <Diagnostics />}
           </div>
         </div>
@@ -158,7 +158,7 @@ function Saved() {
 }
 
 /* ---------------- Preferences ---------------- */
-function Preferences({ onChanged }: { onChanged: () => void }) {
+function Preferences({ onChanged, onTheme }: { onChanged: () => void; onTheme: (t: Prefs['theme']) => void }) {
   const { data, reload } = useLoad<{ prefs: Prefs; publishers: string[] }>('/api/prefs');
   const diag = useLoad<any>('/api/diagnostics');
   const [p, setP] = useState<Prefs | null>(null); const [saved, setSaved] = useState(false); const [budget, setBudget] = useState<number | null>(null);
@@ -171,6 +171,7 @@ function Preferences({ onChanged }: { onChanged: () => void }) {
   return (
     <div className="space-y-5">
       <h3 className="text-base font-semibold">Preferences</h3>
+      <div className="card p-4"><Field label="Appearance" hint="Saved to your account, so it follows you to your other devices."><select className="input !w-auto" value={p.theme ?? 'system'} onChange={(e) => { const theme = e.target.value as Prefs['theme']; setP({ ...p, theme }); onTheme(theme); }}><option value="system">Match my device</option><option value="light">Light</option><option value="dark">Dark</option></select></Field></div>
       <div className="card space-y-3 p-4"><h4 className="font-medium">Ranking weights (normalized automatically)</h4>
         <div className="grid gap-3 sm:grid-cols-5">{(Object.keys(p.weights) as (keyof Prefs['weights'])[]).map((k) => <Field key={k} label={k[0].toUpperCase() + k.slice(1)}><input className="input" type="number" step="0.05" min="0" max="1" value={p.weights[k]} onChange={(e) => setP({ ...p, weights: { ...p.weights, [k]: num(e.target.value) } })} /></Field>)}</div></div>
       <div className="card space-y-3 p-4"><h4 className="font-medium">“For You” mix (flexible; empty buckets never get filler)</h4>

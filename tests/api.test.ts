@@ -203,6 +203,8 @@ describe('API validation & behavior', () => {
     const before = (db.prepare('SELECT total_changes() n').get() as any).n;
     await call('PUT', '/api/theme', { theme: 'light' });
     expect((db.prepare('SELECT total_changes() n').get() as any).n).toBe(before); // unchanged -> no write
+    expect((await call('PUT', '/api/theme', { theme: 'system' })).json()).toEqual({ theme: 'system' }); // Preferences can return to 'match my device'
+    expect((await call('GET', '/api/me')).json().theme).toBe('system');
     expect((await call('PUT', '/api/theme', { theme: 'purple' })).statusCode).toBe(400);
     expect((await app.inject({ method: 'PUT', url: '/api/theme', payload: { theme: 'dark' } })).statusCode).toBe(401);
   });
