@@ -78,7 +78,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
         <button className="btn btn-ghost !px-2" aria-label="Hide story" title="Hide" onClick={() => run(() => api(`/api/stories/${story.id}/hide`, { method: 'POST', body: { hidden: true } }), {}).then(() => onGone(story.id))}><Icon d={EYE_OFF} /></button>
         <button className="btn btn-ghost text-xs" onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
         <span className="flex-1" />
-        <button className="btn btn-ghost text-xs" onClick={toggleWhy} aria-expanded={why}>Why am I seeing this?</button>
+        <button className="btn btn-ghost text-xs" onClick={toggleWhy} aria-expanded={why}>Why recommended?</button>
         {story.sourceCount + story.mutedSources > 1 && <button className="btn btn-outline text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : `See coverage from ${story.sourceCount} ${story.sourceCount === 1 ? 'source' : 'sources'}${story.mutedSources > 0 ? ` (+${story.mutedSources} muted)` : ''}`}</button>}
       </div>
 

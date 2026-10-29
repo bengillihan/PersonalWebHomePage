@@ -1,4 +1,5 @@
 import type { DB } from './db.js';
+import { priorityForWeight, reindexTopics } from './news/topics.js';
 
 interface SeedSource { key: string; name: string; site: string; feed: string | null; kind: 'rss' | 'aggregator'; query?: string; priority: 0 | 1 | 2; local?: boolean; categories: string[] }
 
@@ -41,10 +42,36 @@ export const SEED_BLOCKED = [
       'utah hockey club', 'utah mammoth'] },
 ] as const;
 
+interface SeedInterest { key: string; name: string; weight: 1 | 2 | 3 | 4 | 5; stance?: 'prefer' | 'less'; include: string[] }
+/**
+ * Starting interest profile (editable in Settings; applied once per key, never over an existing interest of the same name, and a deleted one is not
+ * resurrected). Matching is by whole words/phrases only, so descriptions are left empty on purpose: loose description-word overlap would match generic words.
+ * Ambiguous names are qualified ("des moines wa", "kent wa") so they do not sweep in Iowa or Kent State. 'less' topics are shown less often and never hide anything.
+ */
+export const SEED_INTERESTS: SeedInterest[] = [
+  { key: 'ai-tech', name: 'AI and technology', weight: 5, include: ['ai', 'llm', 'llms', 'large language model', 'local inference', 'on device ai', 'ai hardware', 'nvidia', 'apple silicon', 'ai coding', 'coding agent', 'openai', 'anthropic', 'claude', 'gemini', 'gpu', 'cybersecurity', 'ransomware', 'zero day', 'data breach', 'semiconductor', 'open source', 'kubernetes', 'software development', 'benchmark'] },
+  { key: 'investing', name: 'Investing and economics', weight: 5, include: ['federal reserve', 'interest rates', 'rate cut', 'inflation', 'monetary policy', 'index fund', 'index investing', 'emerging markets', 'treasury yields', 'retirement', '401k', 'roth ira', 'social security', 'tax policy', 'tax law', 'cpi', 'gdp', 'jobs report', 'recession', 'etf', 'vanguard', 'tariffs'] },
+  { key: 'local-wa', name: 'Local and Washington state', weight: 5, include: ['washington state', 'king county', 'south king county', 'des moines wa', 'des moines washington', 'kent wa', 'kent washington', 'city of kent', 'seatac', 'sea tac', 'burien', 'federal way', 'renton', 'seattle', 'tacoma', 'puget sound', 'sound transit', 'wsdot', 'olympia'] },
+  { key: 'business-energy', name: 'Business, energy and industry', weight: 4, include: ['manufacturing', 'industrial distribution', 'battery', 'batteries', 'energy storage', 'backup power', 'grid reliability', 'power grid', 'electrical infrastructure', 'data center', 'data centers', 'supply chain', 'microgrid', 'transformer shortage'] },
+  { key: 'major-news', name: 'Major national and international news', weight: 4, include: ['election', 'ceasefire', 'summit', 'sanctions', 'supreme court', 'congress', 'white house', 'nato', 'united nations', 'invasion', 'prime minister'] },
+  { key: 'automobiles', name: 'Automobiles', weight: 4, include: ['bmw', 'e91', '3 series', 'vw gti', 'volkswagen gti', 'golf gti', 'toyota 4runner', '4runner', 'electric vehicle', 'electric vehicles', 'ev conversion', 'used car', 'used cars', 'car reliability'] },
+  { key: 'travel-hiking', name: 'Travel and hiking', weight: 3, include: ['hiking', 'backpacking', 'mount rainier', 'pacific crest trail', 'pct', 'john muir trail', 'south korea', 'iceland', 'ireland', 'national park', 'trailhead', 'thru hike'] },
+  { key: 'health-fitness', name: 'Health and fitness', weight: 3, include: ['exercise science', 'swimming', 'running', 'marathon', 'resistance training', 'strength training', 'preventive health', 'nutrition', 'healthy aging', 'longevity'] },
+  { key: 'tech-careers', name: 'Technology careers and education', weight: 3, include: ['computer science', 'data analytics', 'internship', 'internships', 'tech jobs', 'tech hiring', 'tech layoffs', 'software engineer', 'university of washington'] },
+  { key: 'bible-church', name: 'Biblical studies and church leadership', weight: 2, include: ['theology', 'biblical', 'bible', 'church leadership', 'pastor', 'evangelical', 'christianity', 'seminary'] },
+  // Low-priority: shown less often, never hidden (unlike hard exclusions under "Not interested").
+  { key: 'less-celebrity', name: 'Low priority: celebrity gossip', weight: 1, stance: 'less', include: ['celebrity', 'celebrities', 'kardashian', 'red carpet', 'gossip'] },
+  { key: 'less-sports-scores', name: 'Low priority: minor sports scores', weight: 1, stance: 'less', include: ['final score', 'box score', 'game recap'] },
+  { key: 'less-promo-ai', name: 'Low priority: promotional announcements', weight: 1, stance: 'less', include: ['sponsored', 'press release', 'prnewswire', 'businesswire', 'announces partnership'] },
+  { key: 'less-clickbait', name: 'Low priority: clickbait and speculation', weight: 1, stance: 'less', include: ['you won t believe', 'this one trick', 'meme stock', 'stock picks', 'best stocks to buy', 'price prediction', 'op ed'] },
+  { key: 'less-lifestyle', name: 'Low priority: repetitive lifestyle content', weight: 1, stance: 'less', include: ['lifestyle', 'wellness trends', 'morning routine'] },
+];
+
 export function seedDefaults(db: DB): void {
   const marker = db.prepare('SELECT 1 FROM application_settings WHERE key = ?');
   const mark = db.prepare('INSERT OR IGNORE INTO application_settings (key, value) VALUES (?, ?)');
   const now = Date.now();
+  let addedInterests = 0;
   db.transaction(() => {
     for (const s of SEED_SOURCES) {
       const mk = `seeded:source:${s.key}`;
@@ -67,5 +94,15 @@ export function seedDefaults(db: DB): void {
       db.prepare('INSERT OR IGNORE INTO blocked_topics (name, description, keywords, categories, enabled, seed_key, created_at) VALUES (?,?,?,?,1,?,?)').run(b.name, b.description, JSON.stringify(b.keywords), '[]', b.key, now);
       mark.run(mk, '1');
     }
+    for (const t of SEED_INTERESTS) {
+      const mk = `seeded:interest:${t.key}`;
+      if (marker.get(mk)) continue;
+      // OR IGNORE on the unique name: an interest the user already has under this name is theirs and is left exactly as it is.
+      const r = db.prepare("INSERT OR IGNORE INTO topics (name, kind, description, priority, weight, stance, include_keywords, exclude_keywords, created_at) VALUES (?, 'interest', '', ?, ?, ?, ?, '[]', ?)")
+        .run(t.name, priorityForWeight(t.weight), t.weight, t.stance ?? 'prefer', JSON.stringify(t.include), now);
+      if (r.changes) addedInterests++;
+      mark.run(mk, '1');
+    }
   })();
+  if (addedInterests) reindexTopics(db); // local string matching only; no AI calls
 }

@@ -11,6 +11,8 @@ export interface Candidate {
   maxSourcePriority: number; // 0 low,1 normal,2 high
   interestScore: number; // 0..1 best interest match
   interestName: string | null;
+  interestWeight?: number | null; // the 1-5 weight of the best-matching interest
+  demotedBy?: string | null; // a low-priority topic this story matches (shown less often; never hidden)
   excluded: boolean; // matched an exclude rule
   rating: -1 | 0 | 1;
   readAt: number | null;
@@ -27,6 +29,8 @@ export interface Scored { c: Candidate; score: number; parts: ScoreParts; bucket
 export const RECENCY_HALF_LIFE_H = 18;
 export const MAJOR_IMPORTANCE = 0.6;
 export const INTEREST_MATCH = 0.25;
+/** Score multiplier for a story matching a low-priority topic (it stays in the feed, just lower). */
+export const DEMOTION = 0.6;
 
 const clamp = (n: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, n));
 
@@ -46,15 +50,18 @@ export function scoreCandidate(c: Candidate, prefs: Prefs, fb: FeedbackModel, no
     source: muted ? 0 : clamp((preferred ? 0.9 : [0.3, 0.5, 0.8][c.maxSourcePriority]) + srcQ * 0.2),
     feedback: clamp(0.5 + c.rating * 0.5 + catAff * 0.25),
   };
-  const score = (w.interests * parts.interests + w.importance * parts.importance + w.recency * parts.recency + w.source * parts.source + w.feedback * parts.feedback) / total;
+  const demoted = Boolean(c.demotedBy) && parts.importance < MAJOR_IMPORTANCE; // major news is never pushed down by a low-priority topic
+  const raw = (w.interests * parts.interests + w.importance * parts.importance + w.recency * parts.recency + w.source * parts.source + w.feedback * parts.feedback) / total;
+  const score = demoted ? raw * DEMOTION : raw;
 
   let bucket: Scored['bucket'] = 'other';
-  if (!c.excluded && !muted && c.interestScore >= INTEREST_MATCH) bucket = 'personalized';
+  if (!c.excluded && !muted && !demoted && c.interestScore >= INTEREST_MATCH) bucket = 'personalized';
   else if (parts.importance >= MAJOR_IMPORTANCE) bucket = 'major';
   else if (c.isLocal || preferred) bucket = 'local';
 
   const reasons: string[] = [];
-  if (c.interestScore >= INTEREST_MATCH && !c.excluded) reasons.push(`Matches your interest “${c.interestName}”`);
+  if (c.interestScore >= INTEREST_MATCH && !c.excluded) reasons.push(`Matches your interest “${c.interestName}”${c.interestWeight ? ` (weight ${c.interestWeight} of 5)` : ''}`);
+  if (demoted) reasons.push(`Shown less: matches your low-priority topic “${c.demotedBy}”`);
   if (parts.importance >= MAJOR_IMPORTANCE) reasons.push(`Major story (importance ${(parts.importance * 100).toFixed(0)}%)`);
   if (c.sourceCount > 1) reasons.push(`Reported by ${c.sourceCount} publishers`);
   if (c.isLocal) reasons.push('From a local source');

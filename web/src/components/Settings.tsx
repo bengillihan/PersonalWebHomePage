@@ -97,7 +97,7 @@ function Sources({ onChanged }: { onChanged: () => void }) {
 /* ---------------- Interests ---------------- */
 function Interests({ onChanged }: { onChanged: () => void }) {
   const { data, reload } = useLoad<Topic[]>('/api/topics');
-  const blank = { name: '', kind: 'interest' as const, description: '', priority: 'normal' as const, include: '', exclude: '' };
+  const blank = { name: '', kind: 'interest' as const, description: '', weight: 3, stance: 'prefer' as 'prefer' | 'less', include: '', exclude: '' };
   const [f, setF] = useState(blank); const [err, setErr] = useState<string | null>(null);
   const save = async () => { try { await api('/api/topics', { method: 'POST', body: { ...f, include: csv(f.include), exclude: csv(f.exclude) } }); setF(blank); setErr(null); await reload(); onChanged(); } catch (e) { setErr((e as Error).message); } };
   return (
@@ -106,16 +106,18 @@ function Interests({ onChanged }: { onChanged: () => void }) {
       <div className="card space-y-3 p-4">
         <div className="grid gap-3 sm:grid-cols-3"><Field label="Name"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
           <Field label="Type"><select className="input" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as any })}><option value="interest">Interest</option><option value="category">Category tab</option></select></Field>
-          <Field label="Priority"><select className="input" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value as any })}><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></Field></div>
+          <Field label="Weight (1–5)"><select className="input" value={f.weight} onChange={(e) => setF({ ...f, weight: Number(e.target.value) })}><option value={5}>5 – Highest</option><option value={4}>4 – High</option><option value={3}>3 – Medium</option><option value={2}>2 – Low</option><option value={1}>1 – Lowest</option></select></Field></div>
+        <Field label="How to treat matches"><select className="input" value={f.stance} onChange={(e) => setF({ ...f, stance: e.target.value as 'prefer' | 'less' })}><option value="prefer">Show more (interest)</option><option value="less">Show less (low priority — never hidden)</option></select></Field>
         <Field label="Describe it"><textarea className="input" rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="new local AI hardware performance benchmarks, not generic AI press releases" /></Field>
         <div className="grid gap-3 sm:grid-cols-2"><Field label="Include keywords"><input className="input" value={f.include} onChange={(e) => setF({ ...f, include: e.target.value })} placeholder="E91, N52, valve cover" /></Field><Field label="Exclude keywords"><input className="input" value={f.exclude} onChange={(e) => setF({ ...f, exclude: e.target.value })} /></Field></div>
         {err && <p className="text-sm text-red-600">{err}</p>}<button className="btn btn-primary" disabled={!f.name} onClick={save}>Add</button>
       </div>
       {data?.map((t) => (
         <div key={t.id} className="card flex flex-wrap items-start justify-between gap-3 p-4">
-          <div className="min-w-0"><div className="flex items-center gap-2"><span className="font-semibold">{t.name}</span><span className="chip">{t.kind}</span><span className="chip">{t.priority} priority</span></div>
+          <div className="min-w-0"><div className="flex items-center gap-2"><span className="font-semibold">{t.name}</span><span className="chip">{t.kind}</span><span className="chip">weight {t.weight} of 5</span>{t.stance === 'less' && <span className="chip" title="Shown less often; never hidden. Major stories are unaffected.">show less</span>}</div>
             {t.description && <p className="mt-1 text-sm">{t.description}</p>}<p className="mt-1 text-xs text-slate-500">{t.include.length ? `Include: ${t.include.join(', ')}` : ''} {t.exclude.length ? `· Exclude: ${t.exclude.join(', ')}` : ''}</p></div>
-          <div className="flex gap-2"><select className="input !w-auto" value={t.priority} onChange={async (e) => { await api(`/api/topics/${t.id}`, { method: 'PUT', body: { ...t, priority: e.target.value } }); await reload(); onChanged(); }}><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select>
+          <div className="flex gap-2"><select className="input !w-auto" aria-label={`Weight for ${t.name}`} value={t.weight} onChange={async (e) => { await api(`/api/topics/${t.id}`, { method: 'PUT', body: { ...t, priority: undefined, weight: Number(e.target.value) } }); await reload(); onChanged(); }}><option value={5}>5 – Highest</option><option value={4}>4 – High</option><option value={3}>3 – Medium</option><option value={2}>2 – Low</option><option value={1}>1 – Lowest</option></select>
+            <select className="input !w-auto" aria-label={`Treatment for ${t.name}`} value={t.stance} onChange={async (e) => { await api(`/api/topics/${t.id}`, { method: 'PUT', body: { ...t, priority: undefined, stance: e.target.value } }); await reload(); onChanged(); }}><option value="prefer">Show more</option><option value="less">Show less</option></select>
             <button className="btn btn-ghost !text-rose-600" onClick={async () => { await api(`/api/topics/${t.id}`, { method: 'DELETE' }); await reload(); onChanged(); }}>Delete</button></div>
         </div>
       ))}

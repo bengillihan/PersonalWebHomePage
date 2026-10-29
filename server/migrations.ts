@@ -260,4 +260,14 @@ ALTER TABLE ai_usage ADD COLUMN completed INTEGER NOT NULL DEFAULT 0;
 UPDATE ai_usage SET completed = MAX(requests - errors, 0);
 `,
   },
+  {
+    id: 7,
+    name: 'topic_weight_and_stance',
+    // Interests get a 1-5 weight (NULL = derive from the legacy 3-level priority, so existing rows rank exactly as before) and a stance:
+    // 'less' marks a low-priority topic that is shown less often. It never hides anything (hard exclusions are blocked_topics).
+    sql: `
+ALTER TABLE topics ADD COLUMN weight INTEGER CHECK (weight IS NULL OR weight BETWEEN 1 AND 5);
+ALTER TABLE topics ADD COLUMN stance TEXT NOT NULL DEFAULT 'prefer' CHECK (stance IN ('prefer','less'));
+`,
+  },
 ];

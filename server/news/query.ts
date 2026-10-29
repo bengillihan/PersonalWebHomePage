@@ -1,7 +1,7 @@
 import type { DB } from '../db.js';
 import { getPrefs } from '../settings.js';
-import { balanceFeed, buildFeedbackModel, scoreCandidate, type Candidate, type Scored } from './rank.js';
-import { loadTopics } from './topics.js';
+import { balanceFeed, buildFeedbackModel, INTEREST_MATCH, scoreCandidate, type Candidate, type Scored } from './rank.js';
+import { loadTopics, weightFactor } from './topics.js';
 import { isUsableSummary } from './cluster.js';
 
 export interface FeedQuery { tab: string; q?: string; topic?: string; cursor?: string; limit?: number }
@@ -133,11 +133,13 @@ function scoreRows(db: DB, rows: any[]): Scored[] {
   }
   const topics = loadTopics(db);
   const topicRows = db.prepare(`SELECT a.cluster_id, att.topic_id, MAX(att.score) score FROM article_topics att JOIN articles a ON a.id = att.article_id WHERE a.cluster_id IN (${marks}) GROUP BY a.cluster_id, att.topic_id`).all(...ids) as any[];
-  const bestTopic = new Map<number, { score: number; name: string }>();
+  const bestTopic = new Map<number, { score: number; name: string; weight: number }>();
+  const lessTopic = new Map<number, { score: number; name: string }>();
   for (const t of topicRows) {
-    const w = [0.6, 1, 1.4][topics.find((x) => x.id === t.topic_id)?.priority ?? 1];
-    const s = Math.min(1, t.score * w);
-    if (s > (bestTopic.get(t.cluster_id)?.score ?? 0)) bestTopic.set(t.cluster_id, { score: s, name: topics.find((x) => x.id === t.topic_id)?.name ?? '' });
+    const topic = topics.find((x) => x.id === t.topic_id); if (!topic) continue;
+    if (topic.stance === 'less') { if (t.score > (lessTopic.get(t.cluster_id)?.score ?? 0)) lessTopic.set(t.cluster_id, { score: t.score, name: topic.name }); continue; } // never boosts
+    const s = Math.min(1, t.score * weightFactor(topic.weight));
+    if (s > (bestTopic.get(t.cluster_id)?.score ?? 0)) bestTopic.set(t.cluster_id, { score: s, name: topic.name, weight: topic.weight });
   }
   const excludes = topics.filter((t) => t.kind === 'interest' && t.exclude.length);
   const fbRows = (db.prepare(`SELECT f.rating, f.reason, f.category, f.cluster_id FROM feedback f`).all() as any[]).map((r) => ({
@@ -152,6 +154,7 @@ function scoreRows(db: DB, rows: any[]): Scored[] {
       id: r.id, category: r.category, importance: r.importance, lastPublishedAt: r.last_published_at, sourceCount: r.source_count,
       publishers: [...(g?.pubs ?? [])], isLocal: g?.local ?? false, maxSourcePriority: g?.prio ?? 1,
       interestScore: bestTopic.get(r.id)?.score ?? 0, interestName: bestTopic.get(r.id)?.name ?? null,
+      interestWeight: bestTopic.get(r.id)?.weight ?? null, demotedBy: (lessTopic.get(r.id)?.score ?? 0) >= INTEREST_MATCH ? lessTopic.get(r.id)!.name : null,
       excluded: excludes.some((t) => t.exclude.some((k) => k.trim() && text.includes(k.toLowerCase()))),
       rating: r.rating, readAt: r.read_at,
     };

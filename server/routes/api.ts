@@ -14,7 +14,7 @@ import { discoverFeeds, probeFeed } from '../news/discover.js';
 import { FetchError, validateUrl } from '../net/safeFetch.js';
 import { explainStory, queryFeed } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
-import { reindexTopics, loadTopics } from '../news/topics.js';
+import { reindexTopics, loadTopics, LEGACY_WEIGHT, priorityForWeight } from '../news/topics.js';
 import { getPrefs, savePrefs } from '../settings.js';
 import { getDbIdentity, type PersistenceReport } from '../storage.js';
 import { evaluateSource, MAX_FRESHNESS_HOURS, refreshHealth } from '../news/health.js';
@@ -181,17 +181,21 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   });
 
   // ---- interests / topics ----
-  const topicBody = z.object({ name: z.string().trim().min(1).max(80), kind: z.enum(['category', 'interest']).default('interest'), description: z.string().trim().max(400).default(''), priority: prio.default(1), include: kw.default([]), exclude: kw.default([]) });
-  const topicDto = (t: any) => ({ id: t.id, name: t.name, kind: t.kind, description: t.description, priority: prioOut(t.priority), include: t.include, exclude: t.exclude });
+  const topicBody = z.object({ name: z.string().trim().min(1).max(80), kind: z.enum(['category', 'interest']).default('interest'), description: z.string().trim().max(400).default(''), priority: prio.optional(), weight: z.number().int().min(1).max(5).optional(), stance: z.enum(['prefer', 'less']).optional(), include: kw.default([]), exclude: kw.default([]) });
+  const topicDto = (t: any) => ({ id: t.id, name: t.name, kind: t.kind, description: t.description, priority: prioOut(t.priority), weight: t.weight, stance: t.stance, include: t.include, exclude: t.exclude });
+  // A 1-5 weight wins; a legacy priority alone maps onto the scale; neither means "normal". The legacy column is kept in step with the weight.
+  const topicWeight = (b: z.infer<typeof topicBody>): number | null => b.weight ?? (b.priority === undefined ? null : LEGACY_WEIGHT[b.priority]);
   app.get('/api/topics', async () => loadTopics(db).map(topicDto));
   app.post('/api/topics', async (req, reply) => {
     const b = topicBody.parse(req.body);
-    try { const r = db.prepare('INSERT INTO topics (name, kind, description, priority, include_keywords, exclude_keywords, created_at) VALUES (?,?,?,?,?,?,?)').run(b.name, b.kind, b.description, b.priority, JSON.stringify(b.include), JSON.stringify(b.exclude), Date.now()); reindexTopics(db); return reply.code(201).send({ id: Number(r.lastInsertRowid) }); }
+    const w = topicWeight(b) ?? 3;
+    try { const r = db.prepare('INSERT INTO topics (name, kind, description, priority, weight, stance, include_keywords, exclude_keywords, created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(b.name, b.kind, b.description, priorityForWeight(w), w, b.stance ?? 'prefer', JSON.stringify(b.include), JSON.stringify(b.exclude), Date.now()); reindexTopics(db); return reply.code(201).send({ id: Number(r.lastInsertRowid) }); }
     catch (e) { if (String(e).includes('UNIQUE')) return reply.code(409).send({ error: 'duplicate' }); throw e; }
   });
   app.put('/api/topics/:id', async (req, reply) => {
     const { id } = idParam.parse(req.params); const b = topicBody.parse(req.body);
-    const r = db.prepare('UPDATE topics SET name=?, kind=?, description=?, priority=?, include_keywords=?, exclude_keywords=? WHERE id=?').run(b.name, b.kind, b.description, b.priority, JSON.stringify(b.include), JSON.stringify(b.exclude), id);
+    const w = topicWeight(b); // null (no weight, no priority): leave the existing weight untouched
+    const r = db.prepare('UPDATE topics SET name=?, kind=?, description=?, priority=COALESCE(?, priority), weight=COALESCE(?, weight), stance=COALESCE(?, stance), include_keywords=?, exclude_keywords=? WHERE id=?').run(b.name, b.kind, b.description, w === null ? null : priorityForWeight(w), w, b.stance ?? null, JSON.stringify(b.include), JSON.stringify(b.exclude), id);
     if (!r.changes) return reply.code(404).send({ error: 'not_found' });
     reindexTopics(db); return { ok: true }; // local-only: cached AI summaries are reused
   });

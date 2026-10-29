@@ -3,12 +3,20 @@ import { getSetting, setSetting } from '../db.js';
 import { getPrefs } from '../settings.js';
 import { normalizeTitle, tokens } from './normalize.js';
 
-export interface Topic { id: number; name: string; kind: 'category' | 'interest'; description: string; priority: number; include: string[]; exclude: string[] }
+export interface Topic { id: number; name: string; kind: 'category' | 'interest'; description: string; priority: number; include: string[]; exclude: string[]; weight: number; stance: 'prefer' | 'less' }
+
+/** Legacy 3-level priority (low/normal/high) expressed on the 1-5 scale, chosen so existing topics keep their exact multipliers (0.6 / 1 / 1.4). */
+export const LEGACY_WEIGHT = [2, 3, 5] as const;
+/** How strongly a 1-5 interest weight scales a topic match. */
+export const weightFactor = (w: number): number => ({ 1: 0.4, 2: 0.6, 3: 1, 4: 1.2, 5: 1.4 } as Record<number, number>)[w] ?? 1;
+/** Legacy priority column value that corresponds to a 1-5 weight (kept in sync so older code paths and exports stay meaningful). */
+export const priorityForWeight = (w: number): 0 | 1 | 2 => (w <= 2 ? 0 : w >= 5 ? 2 : 1);
 
 export function loadTopics(db: DB): Topic[] {
   return (db.prepare('SELECT * FROM topics ORDER BY name').all() as any[]).map((r) => ({
     id: r.id, name: r.name, kind: r.kind, description: r.description, priority: r.priority,
     include: JSON.parse(r.include_keywords), exclude: JSON.parse(r.exclude_keywords),
+    weight: r.weight ?? LEGACY_WEIGHT[r.priority] ?? 3, stance: r.stance === 'less' ? 'less' : 'prefer',
   }));
 }
 

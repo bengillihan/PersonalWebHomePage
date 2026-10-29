@@ -22,7 +22,7 @@ export interface Source {
   lastCheckedAt: number | null; lastSuccessAt: number | null; lastItemAt: number | null; lastError: string | null; articleCount: number;
 }
 export interface BlockedTopic { id: number; name: string; description: string; keywords: string[]; categories: string[]; enabled: boolean; seeded: boolean; blockedArticles: number }
-export interface Topic { id: number; name: string; kind: 'category' | 'interest'; description: string; priority: 'high' | 'normal' | 'low'; include: string[]; exclude: string[] }
+export interface Topic { id: number; name: string; kind: 'category' | 'interest'; description: string; priority: 'high' | 'normal' | 'low'; weight: number; stance: 'prefer' | 'less'; include: string[]; exclude: string[] }
 export interface Prefs {
   weights: { interests: number; importance: number; recency: number; source: number; feedback: number };
   quotas: { personalized: number; major: number; local: number };

@@ -7,7 +7,7 @@ const now = Date.now();
 const empty: FeedbackModel = { categoryAffinity: new Map(), sourceQuality: new Map() };
 let n = 0;
 const cand = (o: Partial<Candidate> = {}): Candidate => ({ id: ++n, category: 'Business', importance: 0.3, lastPublishedAt: now - 3_600_000, sourceCount: 1, publishers: ['P'], isLocal: false, maxSourcePriority: 1, interestScore: 0, interestName: null, excluded: false, rating: 0, readAt: null, ...o });
-const topic = (o: Partial<Topic>): Topic => ({ id: 1, name: 't', kind: 'interest', description: '', priority: 1, include: [], exclude: [], ...o });
+const topic = (o: Partial<Topic>): Topic => ({ id: 1, name: 't', kind: 'interest', description: '', priority: 1, include: [], exclude: [], weight: 3, stance: 'prefer', ...o });
 
 describe('ranking', () => {
   it('default weights are 35/25/20/10/10', () => { expect(DEFAULT_PREFS.weights).toEqual({ interests: 0.35, importance: 0.25, recency: 0.2, source: 0.1, feedback: 0.1 }); });
