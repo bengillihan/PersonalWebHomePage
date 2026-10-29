@@ -12,7 +12,7 @@ import { sentencesFallback } from './summary.js';
 
 export interface SourceRow {
   id: number; name: string; site_url: string; feed_url: string | null; kind: 'rss' | 'aggregator'; aggregator_query: string | null;
-  priority: number; enabled: number; etag: string | null; last_modified: string | null;
+  priority: number; enabled: number; is_local: number; coverage: string; etag: string | null; last_modified: string | null;
 }
 export interface RefreshStats { sources: number; ok: number; failed: number; newArticles: number; aiSummarized: number; clusters: number; durationMs: number }
 
@@ -51,9 +51,10 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
     const ids: number[] = [];
     const seen = new Set<string>(); // in-batch duplicates (same canonical URL twice in one feed)
     const find = db.prepare('SELECT id, content_hash FROM articles WHERE canonical_hash = ?');
-    const insert = db.prepare(`INSERT INTO articles (source_id, guid, url, canonical_url, canonical_hash, publisher, title, title_norm, excerpt, image_url, published_at, fetched_at, content_hash, availability)
-      VALUES (@source_id,@guid,@url,@canonical_url,@canonical_hash,@publisher,@title,@title_norm,@excerpt,@image_url,@published_at,@fetched_at,@content_hash,@availability)`);
+    const insert = db.prepare(`INSERT INTO articles (source_id, guid, url, canonical_url, canonical_hash, publisher, title, title_norm, excerpt, image_url, published_at, fetched_at, content_hash, availability, importance)
+      VALUES (@source_id,@guid,@url,@canonical_url,@canonical_hash,@publisher,@title,@title_norm,@excerpt,@image_url,@published_at,@fetched_at,@content_hash,@availability,@importance)`);
     db.transaction(() => {
+      let position = 0;
       for (const raw of feed.items) {
         let item: FeedItem | null = raw;
         if (s.kind === 'aggregator') {
@@ -75,10 +76,13 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
           }
           continue;
         }
+        // Heuristic until Gemini scores it: feeds list top stories first, so early items from general (non-local) sources count as major.
+        const importance = !s.is_local && s.coverage === 'comprehensive' ? (position < 8 ? 0.62 : position < 20 ? 0.45 : 0.3) : 0.3;
+        position++;
         const r = insert.run({
           source_id: s.id, guid: item.guid, url: item.url, canonical_url: canonical, canonical_hash: hash, publisher: item.publisher ?? s.name,
           title: item.title, title_norm: normalizeTitle(item.title), excerpt: item.excerpt, image_url: item.imageUrl,
-          published_at: item.publishedAt, fetched_at: now, content_hash: contentHash, availability: item.excerpt ? 'excerpt' : 'headline_only',
+          published_at: item.publishedAt, fetched_at: now, content_hash: contentHash, availability: item.excerpt ? 'excerpt' : 'headline_only', importance,
         });
         ids.push(Number(r.lastInsertRowid));
       }

@@ -11,8 +11,9 @@ export const SEED_SOURCES: SeedSource[] = [
   { key: 'waterlandblog', name: 'Waterland Blog', site: 'https://waterlandblog.com/', feed: 'https://waterlandblog.com/feed/', kind: 'rss', priority: 2, local: true, categories: ['Local'] },
   // mynorthwest.com/feed/ answers 403 to non-browser clients; we do not spoof a browser. Use the labeled aggregator.
   { key: 'mynorthwest', name: 'MyNorthwest', site: 'https://mynorthwest.com/', feed: null, kind: 'aggregator', query: 'site:mynorthwest.com', priority: 1, local: true, categories: ['Local', 'Regional'] },
-  // CNN's legacy RSS feeds are frozen (2018); use the aggregator restricted to cnn.com/business.
-  { key: 'cnn-business', name: 'CNN Business', site: 'https://www.cnn.com/business', feed: null, kind: 'aggregator', query: 'site:cnn.com/business', priority: 1, categories: ['Business'] },
+  // CNN's legacy RSS feeds are frozen (2018). Google News ignores path restrictions (site:cnn.com/business returned 2021 items),
+  // so this is the cnn.com domain filtered by the keyword "business" - labeled as such in the UI, not the real /business section.
+  { key: 'cnn-business', name: 'CNN Business', site: 'https://www.cnn.com/business', feed: null, kind: 'aggregator', query: 'site:cnn.com business', priority: 1, categories: ['Business'] },
   { key: 'bbc-news', name: 'BBC News', site: 'https://www.bbc.com/news', feed: 'https://feeds.bbci.co.uk/news/rss.xml', kind: 'rss', priority: 1, categories: ['World'] },
 ];
 

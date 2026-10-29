@@ -18,6 +18,7 @@ export interface Config {
   marketProvider: string;
   twelveDataKey: string;
   devLogin: boolean;
+  cronToken: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -44,6 +45,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     marketProvider: env.MARKET_PROVIDER ?? 'twelvedata',
     twelveDataKey: env.TWELVEDATA_API_KEY ?? '',
     devLogin: env.DEV_LOGIN === 'true' && !isProd,
+    cronToken: (env.CRON_TOKEN ?? '').length >= 32 ? env.CRON_TOKEN! : '',
   };
   return cfg;
 }

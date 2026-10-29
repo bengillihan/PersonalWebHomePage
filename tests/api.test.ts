@@ -97,6 +97,17 @@ describe('authentication & session security', () => {
   });
 });
 
+describe('optional cron endpoint', () => {
+  it('does not exist unless CRON_TOKEN is configured, and requires the bearer token when it is', async () => {
+    expect((await app.inject({ method: 'POST', url: '/internal/refresh' })).statusCode).toBe(404);
+    const built = await buildApp(testConfig({ CRON_TOKEN: 'c'.repeat(40) }), memDb(), { oidc, logger: false, transport: null });
+    expect((await built.app.inject({ method: 'POST', url: '/internal/refresh' })).statusCode).toBe(401);
+    expect((await built.app.inject({ method: 'POST', url: '/internal/refresh', headers: { authorization: 'Bearer ' + 'x'.repeat(40) } })).statusCode).toBe(401);
+    expect((await built.app.inject({ method: 'POST', url: '/internal/refresh', headers: { authorization: 'Bearer ' + 'c'.repeat(40) } })).statusCode).toBe(202);
+    await built.app.close();
+  });
+});
+
 describe('API validation & behavior', () => {
   let sess: { cookie: string; csrf: string } | null = null;
   beforeEach(() => { sess = null; });
@@ -159,7 +170,18 @@ describe('API validation & behavior', () => {
   it('diagnostics reports counts, db size, and no secrets', async () => {
     const j = (await call('GET', '/api/diagnostics')).json();
     expect(j.counts).toHaveProperty('articles'); expect(j.db.approxSizeMB).toBeGreaterThan(0); expect(j.sources).toHaveLength(4);
-    expect(JSON.stringify(j)).not.toMatch(/sec|x{20}/); // no client secret / session secret
+    expect(JSON.stringify(j)).not.toMatch(/secret|x{20}|"sec"/i); // neither the session secret (x*40) nor the client secret (sec)
+  });
+  it('serves a restorable gzipped SQLite backup, only to the signed-in user', async () => {
+    expect((await app.inject({ url: '/api/backup' })).statusCode).toBe(401);
+    const r = await call('GET', '/api/backup');
+    expect(r.statusCode).toBe(200); expect(r.headers['content-type']).toBe('application/gzip');
+    const raw = (await import('node:zlib')).gunzipSync(r.rawPayload);
+    expect(raw.subarray(0, 15).toString()).toBe('SQLite format 3');
+    const os = await import('node:os'), fs = await import('node:fs'), path = await import('node:path');
+    const f = path.join(os.tmpdir(), 'restore-test-' + Date.now() + '.sqlite'); fs.writeFileSync(f, raw);
+    const restored = (await import('../server/db.js')).openDb(f);
+    expect((restored.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(4); restored.close(); fs.rmSync(f);
   });
   it('security headers are set and API responses are not cacheable', async () => {
     const h = await app.inject({ url: '/health' });

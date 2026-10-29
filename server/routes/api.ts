@@ -1,4 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import zlib from 'node:zlib';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Config } from '../config.js';
@@ -27,7 +30,7 @@ function sourceDto(s: any) {
   const feed = feedUrlFor(s);
   return {
     id: s.id, name: s.name, siteUrl: s.site_url, feedUrl: feed && s.kind === 'rss' ? feed : null, kind: s.kind,
-    aggregatorLabel: s.kind === 'aggregator' ? `Aggregated via Google News (restricted to ${s.aggregator_query}); links open through Google News` : null,
+    aggregatorLabel: s.kind === 'aggregator' ? `Aggregated via Google News: domain-restricted search "${s.aggregator_query}" (keyword-based, not the publisher's own section feed); links open through Google News` : null,
     priority: prioOut(s.priority), enabled: !!s.enabled, coverage: s.coverage, categories: JSON.parse(s.categories), isLocal: !!s.is_local,
     health: s.health, lastCheckedAt: s.last_checked_at, lastSuccessAt: s.last_success_at, lastItemAt: s.last_item_at, lastError: s.last_error,
     articleCount: s.article_count ?? 0,
@@ -114,7 +117,8 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     const site = validateUrl(b.url, d.fetchOpts);
     let feedUrl: string | null = null; let kind: 'rss' | 'aggregator' = 'rss'; let query: string | null = null; let name = b.name ?? site.hostname.replace(/^www\./, '');
     if (b.aggregator) {
-      kind = 'aggregator'; query = `site:${site.hostname.replace(/^www\./, '')}${site.pathname.length > 1 ? site.pathname.replace(/\/$/, '') : ''}`;
+      kind = 'aggregator'; const seg = site.pathname.split('/').filter(Boolean)[0]; // Google News ignores path restrictions, so a first path segment becomes a keyword
+      query = `site:${site.hostname.replace(/^www\./, '')}${seg ? ' ' + seg : ''}`;
     } else {
       let cand;
       if (b.feedUrl) { cand = await probeFeed(validateUrl(b.feedUrl, d.fetchOpts).toString(), d.fetchOpts).catch((e) => { throw new FetchError(`Feed check failed: ${e.message}`, 'bad_feed'); }); }
@@ -226,6 +230,15 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
       jobs: (db.prepare('SELECT id, kind, status, trigger, started_at, finished_at, stats, error FROM processing_jobs ORDER BY started_at DESC LIMIT 10').all() as any[]).map((j) => ({ ...j, stats: j.stats ? JSON.parse(j.stats) : null })),
       cache: { staleAfterMinutes: getPrefs(db).staleMinutes, retentionDays: getPrefs(db).retentionDays },
     };
+  });
+  // Consistent online snapshot (SQLite backup API, WAL-safe), gzipped and streamed to the browser so the copy lives OFF the volume.
+  app.get('/api/backup', heavy, async (_req, reply) => {
+    const tmp = path.join(os.tmpdir(), `dash-backup-${process.pid}-${Date.now()}.sqlite`);
+    await db.backup(tmp);
+    const stream = fs.createReadStream(tmp).pipe(zlib.createGzip({ level: 6 }));
+    stream.on('close', () => fs.rm(tmp, () => {}));
+    reply.header('content-type', 'application/gzip').header('content-disposition', `attachment; filename="dashboard-${new Date().toISOString().slice(0, 10)}.sqlite.gz"`);
+    return reply.send(stream);
   });
   app.get('/api/export', async (_req, reply) => {
     reply.header('content-disposition', 'attachment; filename="dashboard-settings.json"');

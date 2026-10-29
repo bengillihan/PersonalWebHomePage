@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,18 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
   registerAuth(app, cfg, db, oidc);
   registerApi(app, { cfg, db, ai, refresher, market, provider, fetchOpts: o.fetchOpts });
 
+  // Optional external trigger (e.g. a Railway cron service calling curl). Off unless CRON_TOKEN (>=32 chars) is set.
+  // The web app itself never polls: this is the only way refreshes happen without a user request.
+  if (cfg.cronToken) {
+    const want = Buffer.from(cfg.cronToken);
+    app.post('/internal/refresh', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async (req, reply) => {
+      const got = Buffer.from(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
+      if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return reply.code(401).send({ error: 'unauthorized' });
+      void refresher.trigger('cron').catch(() => {}); void market.refreshIfNeeded().catch(() => {});
+      return reply.code(202).send({ ok: true });
+    });
+  }
+
   app.get('/health', { config: { rateLimit: false } }, async () => ({ ok: true }));
 
   app.setErrorHandler((err: any, req, reply) => {
@@ -54,7 +67,7 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
   if (fs.existsSync(webDir)) {
     await app.register(fastifyStatic, { root: webDir, wildcard: false, setHeaders: (res, p) => { res.header('cache-control', p.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache'); } });
     app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api/') || req.url.startsWith('/auth/')) return reply.code(404).send({ error: 'not_found' });
+      if (req.method !== 'GET' || /^\/(api|auth|internal)\//.test(req.url)) return reply.code(404).send({ error: 'not_found' });
       return reply.header('cache-control', 'no-cache').sendFile('index.html');
     });
   }
