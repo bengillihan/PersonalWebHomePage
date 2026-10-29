@@ -18,7 +18,7 @@ import { reindexTopics, loadTopics } from '../news/topics.js';
 import { getPrefs, savePrefs } from '../settings.js';
 import { getDbIdentity, type PersistenceReport } from '../storage.js';
 import { evaluateSource, MAX_FRESHNESS_HOURS, refreshHealth } from '../news/health.js';
-import { RANGES, type MarketService, type Range } from '../market/service.js';
+import { RANGES, MarketService, type Range } from '../market/service.js';
 import { ProviderError, type MarketProvider } from '../market/provider.js';
 
 export interface ApiDeps { cfg: Config; db: DB; ai: Ai; refresher: Refresher; market: MarketService; provider: MarketProvider; fetchOpts?: { allowPrivate?: boolean }; persistence: PersistenceReport }
@@ -233,9 +233,12 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   app.patch('/api/watchlist/:id', async (req) => {
     const { id } = idParam.parse(req.params); const b = watchBody.partial().parse(req.body);
     const cur = db.prepare('SELECT * FROM watchlist WHERE id = ?').get(id) as any; if (!cur) throw new FetchError('not found', 'not_found');
+    const next = { symbol: cur.symbol, name: b.name ?? cur.name, instrument_type: b.type ?? cur.instrument_type, provider_symbol: b.providerSymbol === undefined ? cur.provider_symbol : b.providerSymbol || null };
     db.prepare('UPDATE watchlist SET name=?, instrument_type=?, provider_symbol=? WHERE id=?').run(b.name ?? cur.name, b.type ?? cur.instrument_type, b.providerSymbol === undefined ? cur.provider_symbol : b.providerSymbol || null, id);
-    db.prepare("DELETE FROM market_prices WHERE symbol = ?").run(cur.symbol); // provider mapping changed: drop stale cache
-    void market.refreshIfNeeded().catch(() => {});
+    if (MarketService.mappingKey(next) !== MarketService.mappingKey(cur)) { // only a real remap drops the cache (a rename keeps its data and costs no credits)
+      db.prepare("DELETE FROM market_prices WHERE symbol = ?").run(cur.symbol);
+      void market.mappingChanged().catch(() => {});
+    }
     return { ok: true };
   });
   app.delete('/api/watchlist/:id', async (req) => { const { id } = idParam.parse(req.params); const w = db.prepare('SELECT symbol FROM watchlist WHERE id = ?').get(id) as any; if (w) { db.prepare('DELETE FROM watchlist WHERE id = ?').run(id); db.prepare('DELETE FROM market_prices WHERE symbol = ?').run(w.symbol); } return { ok: true }; });

@@ -90,9 +90,17 @@ export interface SeriesDto { symbol: string; range: Range; bars: Bar[]; availabl
 
 export class MarketService {
   private inflight: Promise<void> | null = null;
+  /** Set when a result was discarded or a mapping changed mid-run: one follow-up pass fetches the replacement (cache and rate limits still apply). */
+  private rerun = false;
   constructor(private db: DB, private provider: MarketProvider) {}
 
   get providerInfo() { return { name: this.provider.name, configured: this.provider.configured }; }
+
+  /** What a stored price depends on: the provider symbol (and type, which decides NAV handling). A result is only valid for the mapping it was requested under. */
+  static mappingKey(w: { symbol: string; provider_symbol?: string | null; instrument_type: string }) { return `${w.provider_symbol || w.symbol}|${w.instrument_type}`; }
+  private row(symbol: string) { return this.db.prepare('SELECT * FROM watchlist WHERE symbol = ?').get(symbol) as any | undefined; }
+  /** Called after a watchlist mapping edit/removal: makes sure a replacement fetch happens even if a run is already in flight. */
+  mappingChanged(): Promise<void> { if (this.inflight) this.rerun = true; return this.refreshIfNeeded(); }
 
   private rows() { return this.db.prepare('SELECT * FROM watchlist ORDER BY position, id').all() as any[]; }
 
@@ -131,32 +139,41 @@ export class MarketService {
   refreshIfNeeded(force = false): Promise<void> {
     if (!this.provider.configured) return Promise.resolve();
     if (this.inflight) return this.inflight;
-    this.inflight = this.run(force).finally(() => { this.inflight = null; });
+    this.inflight = (async () => {
+      await this.run(force);
+      for (let i = 0; i < 3 && this.rerun; i++) { this.rerun = false; await this.run(false); }
+      this.rerun = false;
+    })().finally(() => { this.inflight = null; });
     return this.inflight;
   }
   get running() { return this.inflight !== null; }
 
   private async run(force: boolean) {
     const now = Date.now();
-    const cached = new Map((this.db.prepare("SELECT * FROM market_prices WHERE range = 'daily'").all() as any[]).map((r) => [r.symbol, r]));
     const put = this.db.prepare(`INSERT INTO market_prices (symbol, range, fetched_at, last_value, change_abs, change_pct, as_of, is_daily_nav, series, error)
       VALUES (?, 'daily', ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(symbol, range) DO UPDATE SET fetched_at=excluded.fetched_at, last_value=excluded.last_value,
       change_abs=excluded.change_abs, change_pct=excluded.change_pct, as_of=excluded.as_of, is_daily_nav=excluded.is_daily_nav, series=COALESCE(excluded.series, market_prices.series), error=excluded.error`);
     let calls = 0;
-    for (const w of this.rows()) {
-      const c = cached.get(w.symbol);
+    for (const listed of this.rows()) {
+      // Re-read the entry and its cache right before deciding: the user may have remapped it since this run began.
+      const w = this.row(listed.symbol); if (!w) continue;
+      const c = this.db.prepare("SELECT * FROM market_prices WHERE symbol = ? AND range = 'daily'").get(w.symbol) as any;
       const hadError = Boolean(c?.error);
       const lastBar = c?.series ? (JSON.parse(c.series) as Bar[]).at(-1)?.date ?? null : null;
       if (!force && !needsRefresh(w.instrument_type, { fetchedAt: c?.fetched_at ?? null, lastBarDate: lastBar, hadError }, now)) continue;
       if (force && c && now - c.fetched_at < 60_000) continue;
       if (calls >= 7) break; // stay under the 8 credits/minute free tier; the rest refresh on the next request
       calls++;
+      const key = MarketService.mappingKey(w); // captured before the request
+      const current = () => { const n = this.row(w.symbol); return n !== undefined && MarketService.mappingKey(n) === key; };
       try {
         const s = await this.provider.dailySeries(w.provider_symbol || w.symbol, HISTORY_DAYS);
+        if (!current()) { this.rerun = true; continue; } // remapped or removed while in flight: this answer belongs to a different instrument
         const ch = changesFromBars(s.bars).find((r) => r.range === '1D');
         const last = s.bars[s.bars.length - 1];
         put.run(w.symbol, Date.now(), last.close, ch?.change ?? null, ch?.pct ?? null, last.date, w.instrument_type === 'mutual_fund' ? 1 : 0, JSON.stringify(s.bars), null);
       } catch (e) {
+        if (!current()) { this.rerun = true; continue; }
         const msg = (e as Error).message;
         put.run(w.symbol, Date.now(), null, null, null, null, w.instrument_type === 'mutual_fund' ? 1 : 0, null, msg);
         if (e instanceof ProviderError && (e.kind === 'rate_limit' || e.kind === 'no_key')) break;
