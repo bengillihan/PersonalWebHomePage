@@ -3,6 +3,7 @@ import { api, ApiError, setCsrf, timeAgo } from './api';
 import type { Status, Topic } from './types';
 import Feed from './components/Feed';
 import Market from './components/Market';
+import Weather from './components/Weather';
 import Settings from './components/Settings';
 
 const TABS: [string, string][] = [['foryou', 'For You'], ['latest', 'Latest'], ['unread', 'Unread'], ['local', 'Local'], ['saved', 'Saved'], ['explore', 'Explore']];
@@ -60,6 +61,7 @@ export default function App() {
       </header>
 
       <div className="mt-4"><Market version={marketVersion} onOpenSettings={setSettings} /></div>
+      <div className="mt-3"><Weather version={marketVersion} /></div>
 
       <div className="mt-5 flex flex-col gap-3">
         <div className="relative"><input className="input !py-2.5 !pl-9" type="search" placeholder="Search articles, publishers, categories, keywords…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />

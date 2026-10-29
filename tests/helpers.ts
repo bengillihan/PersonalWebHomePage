@@ -19,7 +19,7 @@ export async function fixtureServer(): Promise<Fixture> {
   const routes: Fixture['routes'] = new Map(); const hits: string[] = [];
   const srv = http.createServer((req, res) => {
     hits.push(req.url!);
-    const r = routes.get(req.url!);
+    const r = routes.get(req.url!) ?? routes.get(req.url!.split('?')[0]); // query-insensitive fallback
     if (!r) { res.statusCode = 404; return res.end('nope'); }
     res.writeHead(r.status ?? 200, { 'content-type': r.type ?? 'application/rss+xml', ...r.headers });
     res.end(r.body);

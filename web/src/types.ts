@@ -23,3 +23,10 @@ export interface Prefs {
   quotas: { personalized: number; major: number; local: number };
   preferredPublishers: string[]; mutedPublishers: string[]; theme: 'light' | 'dark' | 'system'; showImages: boolean; retentionDays: number; staleMinutes: number;
 }
+export interface WeatherLocation { label: string; lat: number; lon: number; zip: string | null }
+export interface WeatherDay { date: string; code: number; description: string; icon: string; highF: number; lowF: number; precipPct: number | null }
+export interface WeatherView {
+  location: WeatherLocation; fetchedAt: number | null; stale: boolean; refreshing: boolean; error: string | null;
+  forecast: { timezone: string; current: { tempF: number; description: string; icon: string }; days: WeatherDay[] } | null;
+  attribution: { text: string; url: string }[];
+}
