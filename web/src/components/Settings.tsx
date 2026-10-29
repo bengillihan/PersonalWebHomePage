@@ -206,6 +206,10 @@ function Diagnostics() {
         <Stat k="Articles" v={d.counts.articles} /><Stat k="Stories (clusters)" v={d.counts.clusters} /><Stat k="Multi-source stories" v={d.counts.multiSourceClusters} /><Stat k="Headline-only" v={d.counts.headlineOnly} />
         <Stat k="DB size" v={`${d.db.approxSizeMB} MB`} /><Stat k="WAL size" v={`${d.db.walSizeMB} MB`} /><Stat k="Memory (RSS)" v={`${d.memoryMB.rss} MB`} /><Stat k="Uptime" v={`${Math.round(d.uptimeSec / 60)} min`} />
       </div>
+      <div className="card space-y-1 p-4 text-sm"><h4 className="font-medium">Database &amp; storage</h4>
+        {d.database.identity ? <p>Database ID <code>{d.database.identity.id.slice(0, 8)}…</code> · created {fullDate(d.database.identity.createdAt)}{d.database.identity.origin === 'adopted' ? ' (oldest known data; existing database)' : ''}</p> : <p className="text-amber-700 dark:text-amber-300">No database identity recorded.</p>}
+        <p className={d.database.persistence.verified ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}>{d.database.persistence.message}</p>
+        <p className="text-xs text-slate-500">If the ID or creation time ever changes unexpectedly, the database was replaced and earlier data was lost.</p></div>
       <div className="card space-y-1 p-4 text-sm"><h4 className="font-medium">Cache</h4>
         <p>News refreshed: {timeAgo(d.status.lastNewsRefreshAt)} · {d.status.stale ? 'stale (refreshes on next visit)' : 'fresh'} · refresh after {d.cache.staleAfterMinutes} min · retention {d.cache.retentionDays} days</p>
         <p>Prices fetched: {timeAgo(d.market.lastFetchedAt)} · provider {d.market.provider.name} ({d.market.provider.configured ? 'key configured' : 'no key'}) · {d.market.cached} symbols cached</p>

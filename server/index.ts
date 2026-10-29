@@ -3,6 +3,7 @@ import { openDb } from './db.js';
 import { seedDefaults } from './seed.js';
 import { ensureTopicIndex } from './news/topics.js';
 import { buildApp } from './app.js';
+import { checkPersistence, databaseFileExists, ensureDbIdentity, formatRefusal } from './storage.js';
 
 const cfg = loadConfig();
 const problems = validateConfig(cfg);
@@ -12,10 +13,24 @@ if (problems.length) {
   console.error('(continuing in development; sign-in will not work until these are fixed)');
 }
 
+// On Railway the database must be on the mounted volume. Verified BEFORE the file is opened, so a missing volume can never lead to a
+// silently created, disposable production database.
+const persistence = checkPersistence({ sqlitePath: cfg.sqlitePath, required: cfg.onRailway, allowEphemeral: cfg.allowEphemeralDb, volumePath: cfg.persistentVolumePath });
+if (!persistence.ok) { console.error(formatRefusal(persistence, cfg.sqlitePath)); process.exit(1); }
+
+const existedBefore = databaseFileExists(cfg.sqlitePath);
 const db = openDb(cfg.sqlitePath);
+const { identity, status: dbStatus } = ensureDbIdentity(db, existedBefore);
 seedDefaults(db);
 ensureTopicIndex(db);
-const { app } = await buildApp(cfg, db, { oidc: problems.length && !cfg.devLogin ? null : undefined });
+const { app } = await buildApp(cfg, db, { persistence, oidc: problems.length && !cfg.devLogin ? null : undefined });
+
+const dbInfo = { databaseId: identity.id, path: cfg.sqlitePath, createdAt: new Date(identity.createdAt).toISOString() };
+if (dbStatus === 'created') app.log.warn(dbInfo, '*** NEW DATABASE CREATED *** If this is not your very first deploy, your previous data was NOT found at this path.');
+else if (dbStatus === 'adopted') app.log.info(dbInfo, 'Existing database adopted: assigned a persistent id (no data changed)');
+else app.log.info(dbInfo, 'Existing database opened');
+if (persistence.overridden) app.log.warn({ code: persistence.code }, 'ALLOW_EPHEMERAL_DB=true: database is NOT on verified persistent storage; data will be lost on redeploy');
+else if (persistence.verified) app.log.info({ mountPoint: persistence.mountPoint, fsType: persistence.fsType }, 'Persistent volume verified');
 
 let closing = false;
 async function shutdown(signal: string) {

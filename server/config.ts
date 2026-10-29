@@ -8,6 +8,9 @@ export interface Config {
   publicBaseUrl: string;
   secureCookies: boolean;
   sqlitePath: string;
+  onRailway: boolean;
+  allowEphemeralDb: boolean; // explicit, narrow override: permit a database that is NOT on a verified persistent volume
+  persistentVolumePath: string;
   sessionSecret: string;
   googleClientId: string;
   googleClientSecret: string;
@@ -34,6 +37,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: isProd || onRailway ? '0.0.0.0' : '127.0.0.1',
     publicBaseUrl,
     secureCookies: publicBaseUrl.startsWith('https://'),
+    onRailway,
+    allowEphemeralDb: env.ALLOW_EPHEMERAL_DB === 'true', // exactly "true"; 1/yes/TRUE do not count
+    persistentVolumePath: path.resolve(env.PERSISTENT_VOLUME_PATH ?? '/data'),
     sqlitePath: path.resolve(env.SQLITE_PATH ?? (onRailway ? '/data/dashboard.sqlite' : './data/dashboard.sqlite')),
     sessionSecret,
     googleClientId: env.GOOGLE_CLIENT_ID ?? '',

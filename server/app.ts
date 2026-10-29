@@ -16,11 +16,12 @@ import { MarketService } from './market/service.js';
 import { createTwelveData, type MarketProvider } from './market/provider.js';
 import { registerAuth, createGoogleOidc, type OidcClient } from './auth.js';
 import { registerApi } from './routes/api.js';
+import { checkPersistence, type PersistenceReport } from './storage.js';
 import { Weather, type WeatherOptions } from './weather/weather.js';
 import { registerWeather } from './routes/weather.js';
 import { FetchError } from './net/safeFetch.js';
 
-export interface AppOverrides { oidc?: OidcClient | null; transport?: AiTransport | null; provider?: MarketProvider; fetchOpts?: { allowPrivate?: boolean }; logger?: boolean; weather?: WeatherOptions }
+export interface AppOverrides { oidc?: OidcClient | null; transport?: AiTransport | null; provider?: MarketProvider; fetchOpts?: { allowPrivate?: boolean }; logger?: boolean; weather?: WeatherOptions; persistence?: PersistenceReport }
 export interface Built { app: FastifyInstance; refresher: Refresher; ai: Ai; market: MarketService }
 
 export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promise<Built> {
@@ -41,7 +42,7 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
   const oidc = o.oidc !== undefined ? o.oidc : cfg.googleClientId && cfg.googleClientSecret ? createGoogleOidc(cfg) : null;
 
   registerAuth(app, cfg, db, oidc);
-  registerApi(app, { cfg, db, ai, refresher, market, provider, fetchOpts: o.fetchOpts });
+  registerApi(app, { cfg, db, ai, refresher, market, provider, fetchOpts: o.fetchOpts, persistence: o.persistence ?? checkPersistence({ sqlitePath: cfg.sqlitePath, required: false, allowEphemeral: false, volumePath: cfg.persistentVolumePath }) });
   registerWeather(app, new Weather(db, { fetchOpts: o.fetchOpts, ...o.weather }));
 
   // Optional external trigger (e.g. a Railway cron service calling curl). Off unless CRON_TOKEN (>=32 chars) is set.

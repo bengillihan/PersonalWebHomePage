@@ -16,11 +16,12 @@ import { explainStory, queryFeed } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics } from '../news/topics.js';
 import { getPrefs, savePrefs } from '../settings.js';
+import { getDbIdentity, type PersistenceReport } from '../storage.js';
 import { evaluateSource, MAX_FRESHNESS_HOURS, refreshHealth } from '../news/health.js';
 import { RANGES, type MarketService, type Range } from '../market/service.js';
 import { ProviderError, type MarketProvider } from '../market/provider.js';
 
-export interface ApiDeps { cfg: Config; db: DB; ai: Ai; refresher: Refresher; market: MarketService; provider: MarketProvider; fetchOpts?: { allowPrivate?: boolean } }
+export interface ApiDeps { cfg: Config; db: DB; ai: Ai; refresher: Refresher; market: MarketService; provider: MarketProvider; fetchOpts?: { allowPrivate?: boolean }; persistence: PersistenceReport }
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const prio = z.enum(['high', 'normal', 'low']).transform((p) => ({ high: 2, normal: 1, low: 0 })[p]);
@@ -246,6 +247,8 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
       status: status(), version: process.env.npm_package_version ?? '1.0.0', node: process.version, uptimeSec: Math.round(process.uptime()),
       memoryMB: { rss: Math.round(mem.rss / 1048576), heapUsed: Math.round(mem.heapUsed / 1048576) },
       counts: { articles: n('SELECT COUNT(*) n FROM articles'), clusters: n('SELECT COUNT(*) n FROM story_clusters'), multiSourceClusters: n('SELECT COUNT(*) n FROM story_clusters WHERE article_count > 1'), bookmarks: n('SELECT COUNT(*) n FROM bookmarks'), feedback: n('SELECT COUNT(*) n FROM feedback'), aiCacheEntries: n('SELECT COUNT(*) n FROM ai_cache'), headlineOnly: n("SELECT COUNT(*) n FROM articles WHERE availability = 'headline_only'") },
+      // Persistent id + creation time: if the volume were ever lost, these would change, making a silent reset visible.
+      database: { identity: getDbIdentity(db), persistence: { required: d.persistence.required, verified: d.persistence.verified, overridden: d.persistence.overridden, code: d.persistence.code, message: d.persistence.message, mountPoint: d.persistence.mountPoint, fsType: d.persistence.fsType, volumePath: d.persistence.volumePath } },
       db: { path: d.cfg.sqlitePath, approxSizeMB: +(pages / 1048576).toFixed(2), walSizeMB: +((fs.existsSync(d.cfg.sqlitePath + '-wal') ? fs.statSync(d.cfg.sqlitePath + '-wal').size : 0) / 1048576).toFixed(2) },
       sources: listSources(), ai: ai.usage(),
       market: { provider: market.providerInfo, lastFetchedAt: market.lastFetch(), cached: n("SELECT COUNT(*) n FROM market_prices WHERE error IS NULL"), errors: (db.prepare("SELECT symbol, error FROM market_prices WHERE error IS NOT NULL").all() as any[]) },
