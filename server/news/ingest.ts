@@ -29,6 +29,45 @@ async function pool<T>(items: T[], limit: number, fn: (x: T) => Promise<void>) {
 
 function domainOf(q: string | null): string | null { return q?.match(/site:([^\s/]+)/)?.[1]?.replace(/^www\./, '') ?? null; }
 
+interface ExistingArticle { id: number; title: string; excerpt: string | null; content_hash: string; cluster_id: number | null; summary: string | null; summary_kind: string | null; ai_content_hash: string | null }
+
+/** Wording of the story with case, punctuation, whitespace, accents and feed boilerplate removed. Equal keys = cosmetic edit only. */
+export function materialKey(title: string, excerpt: string | null): string {
+  const body = (excerpt ?? '').replace(/\s*(The post .* appeared first on .*|Read more.*|Continue reading.*)$/i, '');
+  return `${normalizeTitle(title)}|${normalizeTitle(body)}`;
+}
+
+/**
+ * Applies a publisher edit to an already-stored article AND its cluster in one synchronous step (the caller's transaction),
+ * entirely locally so it works with Gemini off, failing or out of budget.
+ *  - Any text change updates the stored headline/excerpt, so the corrected text is what the dashboard shows.
+ *  - Cosmetic-only edits (see materialKey) keep the AI summary and carry the AI marker over, so no Gemini call is made.
+ *  - Material edits drop the now-stale AI summary in favour of the publisher excerpt/headline-only fallback and mark the
+ *    story Updated; AI is re-run later only if it is available. Bookmarks, feedback, read state and the article's
+ *    cluster/source links are untouched (the cluster row is updated in place, never deleted).
+ * Returns true when the change is material (caller should queue the article for AI).
+ */
+function applyCorrection(db: DB, ex: ExistingArticle, item: FeedItem, contentHash: string): boolean {
+  const material = materialKey(ex.title, ex.excerpt) !== materialKey(item.title, item.excerpt);
+  const keepAi = !material && ex.summary_kind === 'ai';
+  const fb = sentencesFallback(item.excerpt, item.title);
+  const summary = keepAi ? ex.summary : fb.text;
+  const kind = keepAi ? 'ai' : fb.kind;
+  const aiHash = !material && ex.ai_content_hash === ex.content_hash ? contentHash : ex.ai_content_hash;
+  db.prepare('UPDATE articles SET title=?, title_norm=?, excerpt=?, content_hash=?, availability=?, summary=?, summary_kind=?, ai_content_hash=? WHERE id=?')
+    .run(item.title, normalizeTitle(item.title), item.excerpt, contentHash, item.excerpt ? 'excerpt' : 'headline_only', summary, kind, aiHash, ex.id);
+  if (ex.cluster_id) {
+    recomputeCluster(db, ex.cluster_id, material); // refreshes title/primary; single-article clusters also take the new summary
+    if (material) { // a consolidated multi-source summary was written from the old text: fall back to the primary's summary until AI regenerates it
+      db.prepare(`UPDATE story_clusters SET differences=NULL, summary_hash=NULL,
+        summary=(SELECT summary FROM articles WHERE id = story_clusters.primary_article_id),
+        summary_kind=(SELECT summary_kind FROM articles WHERE id = story_clusters.primary_article_id)
+        WHERE id=? AND article_count > 1`).run(ex.cluster_id);
+    }
+  }
+  return material;
+}
+
 /** Fetches one source, updates its health, inserts new/changed articles. Returns ids of articles needing processing. */
 export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.now()): Promise<number[]> {
   const { db } = deps;
@@ -50,7 +89,7 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
     const domain = s.kind === 'aggregator' ? domainOf(s.aggregator_query) : null;
     const ids: number[] = [];
     const seen = new Set<string>(); // in-batch duplicates (same canonical URL twice in one feed)
-    const find = db.prepare('SELECT id, content_hash FROM articles WHERE canonical_hash = ?');
+    const find = db.prepare('SELECT id, title, excerpt, content_hash, cluster_id, summary, summary_kind, ai_content_hash FROM articles WHERE canonical_hash = ?');
     const insert = db.prepare(`INSERT INTO articles (source_id, guid, url, canonical_url, canonical_hash, publisher, title, title_norm, excerpt, image_url, published_at, fetched_at, content_hash, availability, importance)
       VALUES (@source_id,@guid,@url,@canonical_url,@canonical_hash,@publisher,@title,@title_norm,@excerpt,@image_url,@published_at,@fetched_at,@content_hash,@availability,@importance)`);
     db.transaction(() => {
@@ -67,13 +106,9 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
         if (seen.has(hash)) continue;
         seen.add(hash);
         const contentHash = sha256(`${item.title}\n${item.excerpt ?? ''}`);
-        const existing = find.get(hash) as { id: number; content_hash: string } | undefined;
+        const existing = find.get(hash) as ExistingArticle | undefined;
         if (existing) {
-          if (existing.content_hash !== contentHash) { // changed story: update and re-process, never reprocess unchanged ones
-            db.prepare('UPDATE articles SET title=?, title_norm=?, excerpt=?, content_hash=?, availability=? WHERE id=?')
-              .run(item.title, normalizeTitle(item.title), item.excerpt, contentHash, item.excerpt ? 'excerpt' : 'headline_only', existing.id);
-            ids.push(existing.id);
-          }
+          if (existing.content_hash !== contentHash && applyCorrection(db, existing, item, contentHash)) ids.push(existing.id); // only material changes need AI
           continue;
         }
         // Heuristic until Gemini scores it: feeds list top stories first, so early items from general (non-local) sources count as major.
@@ -99,14 +134,16 @@ export async function processNewArticles(deps: IngestDeps, ids: number[]): Promi
   const { db, ai } = deps;
   if (ids.length) {
     // 1. Local fallback summaries immediately so the reader never waits on AI.
-    const upd = db.prepare(`UPDATE articles SET summary=?, summary_kind=? WHERE id=? AND (summary_kind IS NULL OR summary_kind != 'ai' OR ai_content_hash != content_hash)`);
+    const upd = db.prepare(`UPDATE articles SET summary=@s, summary_kind=@k WHERE id=@id AND (summary_kind IS NULL OR summary_kind != 'ai' OR ai_content_hash != content_hash) AND (summary IS NOT @s OR summary_kind IS NOT @k)`);
     for (const id of ids) {
       const a = db.prepare('SELECT excerpt, title FROM articles WHERE id=?').get(id) as any;
       const fb = sentencesFallback(a.excerpt, a.title);
-      upd.run(fb.text, fb.kind, id);
+      upd.run({ s: fb.text, k: fb.kind, id });
     }
   }
-  const clusters = await clusterArticles(db, ai, ids.filter((id) => !(db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id));
+  const clustered = (id: number) => (db.prepare('SELECT cluster_id FROM articles WHERE id=?').get(id) as any)?.cluster_id as number | null;
+  const clusters = await clusterArticles(db, ai, ids.filter((id) => !clustered(id)));
+  for (const id of ids) { const cid = clustered(id); if (cid) clusters.add(cid); } // corrected articles: let AI summaries regenerate when available
   // 2. AI classification/summaries for anything not yet analysed at its current content hash.
   let aiCount = 0;
   if (ai?.canCall()) {
