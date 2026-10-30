@@ -8,7 +8,7 @@ import { cleanAggregatorItem, googleNewsFeedUrl, itemOnDomain, parseFeed, type F
 import { refreshHealth } from './health.js';
 import { canonicalizeUrl, normalizeTitle, sha1, sha256 } from './normalize.js';
 import { clusterArticles, clusterContentHash, isUsableSummary, judgeJoin, recomputeCluster } from './cluster.js';
-import { expireChecksFor } from './novelty-checks.js';
+import { expireChecksFor, rehashChecksFor } from './novelty-checks.js';
 import { indexArticleTopics, loadTopics } from './topics.js';
 import { indexArticleBlocks } from './blocking.js';
 import { sentencesFallback } from './summary.js';
@@ -32,7 +32,7 @@ async function pool<T>(items: T[], limit: number, fn: (x: T) => Promise<void>) {
 
 function domainOf(q: string | null): string | null { return q?.match(/site:([^\s/]+)/)?.[1]?.replace(/^www\./, '') ?? null; }
 
-interface ExistingArticle { id: number; source_id: number; title: string; excerpt: string | null; content_hash: string; cluster_id: number | null; summary: string | null; summary_kind: string | null; ai_content_hash: string | null }
+interface ExistingArticle { id: number; source_id: number; title: string; excerpt: string | null; content_hash: string; cluster_id: number | null; summary: string | null; summary_kind: string | null; ai_content_hash: string | null; access?: string | null }
 
 /** Wording of the story with case, punctuation, whitespace, accents and feed boilerplate removed. Equal keys = cosmetic edit only. */
 export function materialKey(title: string, excerpt: string | null): string {
@@ -61,7 +61,8 @@ function applyCorrection(db: DB, ex: ExistingArticle, item: FeedItem, contentHas
   const clusterHashBefore = clusterContentHash(hashes());
   db.prepare('UPDATE articles SET title=?, title_norm=?, excerpt=?, content_hash=?, availability=?, summary=?, summary_kind=?, ai_content_hash=? WHERE id=?')
     .run(item.title, normalizeTitle(item.title), item.excerpt, contentHash, item.excerpt ? 'excerpt' : 'headline_only', summary, kind, aiHash, ex.id);
-  expireChecksFor(db, ex.id); // questions asked about the old wording no longer apply
+  if (material) expireChecksFor(db, ex.id); // questions asked about the old wording no longer apply
+  else rehashChecksFor(db, ex.id, ex.cluster_id, ex.content_hash, contentHash); // cosmetic edit: the same questions about the same news carry over
   if (item.access) db.prepare('UPDATE articles SET access = ? WHERE id = ?').run(item.access, ex.id); // explicit metadata only; never cleared or inferred
   if (ex.cluster_id && !material) { // cosmetic edit: the consolidated summary is still valid, so move its content marker instead of discarding it
     db.prepare('UPDATE story_clusters SET summary_hash=? WHERE id=? AND summary_hash=?').run(clusterContentHash(hashes()), ex.cluster_id, clusterHashBefore);
@@ -118,7 +119,7 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
     const domain = s.kind === 'aggregator' ? domainOf(s.aggregator_query) : null;
     const ids: number[] = [];
     const seen = new Set<string>(); // in-batch duplicates (same canonical URL twice in one feed)
-    const find = db.prepare('SELECT id, source_id, title, excerpt, content_hash, cluster_id, summary, summary_kind, ai_content_hash FROM articles WHERE canonical_hash = ?');
+    const find = db.prepare('SELECT id, source_id, title, excerpt, content_hash, cluster_id, summary, summary_kind, ai_content_hash, access FROM articles WHERE canonical_hash = ?');
     const link = db.prepare('INSERT OR IGNORE INTO article_sources (article_id, source_id, first_seen_at) VALUES (?,?,?)'); // every feed that carries an article
     const insert = db.prepare(`INSERT INTO articles (source_id, guid, url, canonical_url, canonical_hash, publisher, title, title_norm, excerpt, image_url, access, published_at, fetched_at, content_hash, availability, importance)
       VALUES (@source_id,@guid,@url,@canonical_url,@canonical_hash,@publisher,@title,@title_norm,@excerpt,@image_url,@access,@published_at,@fetched_at,@content_hash,@availability,@importance)`);
@@ -142,6 +143,9 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
           // first discovered the article may correct its text; another feed's differing excerpt must not overwrite it (it would
           // flip-flop on every refresh and re-queue the article for Gemini each time).
           link.run(existing.id, s.id, now);
+          // Explicit access is its own piece of metadata, independent of the text hash: a changed status is stored even when the wording is identical, a missing one is
+          // not a change (the last explicit value stands). Display-only: no summary, classification, story or read-state work follows from it.
+          if (existing.source_id === s.id && item.access && item.access !== existing.access) db.prepare('UPDATE articles SET access = ? WHERE id = ?').run(item.access, existing.id);
           if (existing.source_id === s.id && existing.content_hash !== contentHash && applyCorrection(db, existing, item, contentHash)) ids.push(existing.id); // only material changes need AI
           continue;
         }

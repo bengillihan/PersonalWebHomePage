@@ -24,7 +24,27 @@ export function enqueueCheck(db: DB, c: { clusterId: number; articleId: number; 
     .run(c.articleId, c.clusterId, c.articleHash, JSON.stringify(c.baseline), baselineHash(c.baseline), c.eventAt, now, now).changes === 1;
 }
 
-/** The article changed or moved: its open questions no longer describe it. */
+/**
+ * The article's text changed only COSMETICALLY (case, punctuation, whitespace, feed boilerplate): its open questions are still about the same news. They are
+ * re-pointed at the new content hash (here, and inside other checks' frozen baselines that include this article) WITHOUT touching the baseline's wording, so
+ * validation keeps passing and a retry still compares against the original baseline. If a row for the new hash already exists, the old question is expired
+ * instead of creating a duplicate.
+ */
+export function rehashChecksFor(db: DB, articleId: number, clusterId: number | null, oldHash: string, newHash: string, now = Date.now()): void {
+  const own = db.prepare("SELECT id FROM novelty_checks WHERE article_id = ? AND status = 'pending' AND article_hash = ?").get(articleId, oldHash) as { id: number } | undefined;
+  if (own) {
+    if (db.prepare('SELECT 1 FROM novelty_checks WHERE article_id = ? AND article_hash = ?').get(articleId, newHash)) db.prepare("UPDATE novelty_checks SET status = 'expired', updated_at = ? WHERE id = ?").run(now, own.id);
+    else db.prepare('UPDATE novelty_checks SET article_hash = ?, updated_at = ? WHERE id = ?').run(newHash, now, own.id);
+  }
+  if (clusterId === null) return;
+  for (const r of db.prepare("SELECT id, baseline FROM novelty_checks WHERE status = 'pending' AND cluster_id = ?").all(clusterId) as { id: number; baseline: string }[]) {
+    const items = JSON.parse(r.baseline) as BaselineItem[]; let touched = false;
+    for (const b of items) if (b.id === articleId && b.hash === oldHash) { b.hash = newHash; touched = true; } // the identity used for validation, not the compared wording
+    if (touched) db.prepare('UPDATE novelty_checks SET baseline = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(items), now, r.id); // baseline_hash (the cache identity) is kept as first computed
+  }
+}
+
+/** The article changed materially or moved: its open questions no longer describe it. */
 export function expireChecksFor(db: DB, articleId: number, now = Date.now()): void {
   db.prepare("UPDATE novelty_checks SET status = 'expired', updated_at = ? WHERE article_id = ? AND status = 'pending'").run(now, articleId);
 }
@@ -72,7 +92,9 @@ export async function runNoveltyChecks(db: DB, ai: Ai | null, now = Date.now()):
         else db.prepare("UPDATE novelty_checks SET attempts = ?, next_attempt_at = ?, last_error = 'no usable answer', updated_at = ? WHERE id = ?").run(attempts, t + Math.min(BACKOFF_BASE_MS * 2 ** row.attempts, BACKOFF_MAX_MS), t, row.id);
         return;
       }
-      const v = stillValid(db, row); // the world may have changed while the model was thinking
+      const cur = db.prepare("SELECT id, article_id, cluster_id, article_hash, baseline, baseline_hash, event_at, attempts, status FROM novelty_checks WHERE id = ?").get(row.id) as (Row & { status: string }) | undefined;
+      if (!cur || cur.status !== 'pending') return; // expired or replaced while the model was thinking
+      const v = stillValid(db, cur); // the world may have changed while the model was thinking (a cosmetic edit re-pointed the row; a material one expired it)
       if (!v.ok) { db.prepare("UPDATE novelty_checks SET status = 'expired', updated_at = ? WHERE id = ?").run(t, row.id); return; }
       if (answer) { db.prepare('UPDATE story_clusters SET substantive_at = ? WHERE id = ?').run(t, row.cluster_id); applied++; }
       db.prepare("UPDATE novelty_checks SET status = 'done', verdict = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?").run(answer ? 1 : 0, t, row.id);

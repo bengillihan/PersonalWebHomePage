@@ -38,8 +38,9 @@ export default function Market({ version, onOpenSettings, compact = false }: { v
           const up = (d?.change ?? 0) >= 0;
           return (
             <button key={x.symbol} onClick={() => setSel(sel === x.symbol ? null : x.symbol)} aria-pressed={sel === x.symbol}
-              className={`${compact ? 'min-w-[7.5rem] px-2 py-1' : 'min-w-[9.5rem] px-3 py-2'} flex-none rounded-xl border text-left transition ${sel === x.symbol ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60'}`}>
+              className={`${compact ? 'w-[11rem] px-2 py-1' : 'w-[13rem] px-3 py-2'} flex-none rounded-xl border text-left transition ${sel === x.symbol ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60'}`}>
               <div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{x.symbol}</span>{x.isDailyNav && <span className="text-[10px] uppercase tracking-wide text-slate-400">NAV</span>}</div>
+              {x.name && x.name !== x.symbol && <div className="mb-1 line-clamp-2 text-xs text-slate-600 dark:text-slate-300" title={x.name}>{x.name}</div>}
               {x.last != null ? (<>
                 <div className="text-base font-semibold tabular-nums">{fmt(x.last)}</div>
                 {d && !x.isMoneyMarket ? <div title={x.isDailyNav ? '1D: latest published NAV vs the previous published NAV' : '1D: latest daily close vs the previous daily close'} className={`text-xs tabular-nums ${up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{up ? '▲' : '▼'} {fmt(Math.abs(d.change))} ({d.pct >= 0 ? '+' : ''}{d.pct.toFixed(2)}%)</div> : <div className="text-xs text-slate-400">{x.isMoneyMarket ? 'stable NAV' : '—'}</div>}
