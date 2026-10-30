@@ -137,6 +137,17 @@ tests/   vitest (100 tests): security, parsing, ingestion, clustering, ranking, 
 
 Ranking: interests 35 %, importance 25 %, recency 20 %, source preference 10 %, feedback 10 % (all editable). "For You" targets 60 % personalized / 25 % major / 15 % local-or-preferred via a deficit interleave; an empty bucket never gets filler. Thumbs-down reasons are kept separate: *topic* adjusts category affinity, *source* adjusts publisher quality, others affect neither. *Explore* shows stories outside your usual interests.
 
+## Newspaper view and sections
+
+The default layout is a newspaper: a Front Page (market watchlist, one lead, secondary stories, then a block per section, each story shown once)
+and tabs for Local, Regional, Washington, U.S., World, Business, Technology, Sports and Weather. **Compact feed** (switch at the top, remembered
+per browser) is the original single-column feed. Sections reuse the stories' existing classification and the same ranking, blocked-topic,
+muted-publisher and read/unread rules; no extra Gemini calls are made for layout.
+
+Local, Regional and Washington are placed by the places named in a story's headline and summary, not by the publisher's location, and a story can
+appear in several. Edit the place lists (and which places are lifted to the top of Local, by default Des Moines and Federal Way) in
+**Settings -> Geography**.
+
 ## Known limitations
 
 * Aggregator-sourced stories (MyNorthwest, CNN) are headline-only with Google News links.

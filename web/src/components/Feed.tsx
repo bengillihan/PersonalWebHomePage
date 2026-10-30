@@ -5,7 +5,8 @@ import StoryCard from './StoryCard';
 
 export interface FeedFilter { tab: string; q: string; topic?: string }
 
-export default function Feed({ filter, onStatus, onOpenSettings, newVersion }: { filter: FeedFilter; onStatus: (s: Status) => void; onOpenSettings: (p: string) => void; newVersion: number }) {
+/** `newspaper` lays the same stories out in columns (the first one as a lead on section pages); `compact` is the single-column feed. */
+export default function Feed({ filter, onStatus, onOpenSettings, newVersion, layout = 'compact', lead = false }: { layout?: 'compact' | 'newspaper'; lead?: boolean; filter: FeedFilter; onStatus: (s: Status) => void; onOpenSettings: (p: string) => void; newVersion: number }) {
   const [items, setItems] = useState<Story[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,6 +85,8 @@ export default function Feed({ filter, onStatus, onOpenSettings, newVersion }: {
     setItems((p) => (p.some((x) => x.id === story.id) ? p : [...p.slice(0, Math.min(index, p.length)), { ...story, isRead: false, isUpdated: false }, ...p.slice(Math.min(index, p.length))]));
   };
 
+  const gone = (id: number) => (id === -1 ? load() : setItems((p) => p.filter((x) => x.id !== id)));
+
   const toast = undo && (
     <div role="status" className="fixed inset-x-0 bottom-4 z-50 mx-auto flex w-fit max-w-[92vw] items-center gap-3 rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white shadow-lg dark:bg-slate-100 dark:text-slate-900">
       <span className="truncate">Marked as read</span>
@@ -111,7 +114,9 @@ export default function Feed({ filter, onStatus, onOpenSettings, newVersion }: {
     }
     return (
       <div className="space-y-4">
-        {items.map((s) => <StoryCard key={s.id} story={s} showImages={showImages} onChange={update} onRead={markRead} onGone={(id) => (id === -1 ? load() : setItems((p) => p.filter((x) => x.id !== id)))} />)}
+        {layout === 'newspaper'
+          ? <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 lg:grid-cols-3">{items.map((s, i) => { const isLead = lead && i === 0; return <div key={s.id} className={isLead ? 'md:col-span-2 lg:col-span-3' : undefined}><StoryCard variant={isLead ? 'lead' : 'brief'} story={s} showImages={showImages} onChange={update} onRead={markRead} onGone={gone} /></div>; })}</div>
+          : items.map((s) => <StoryCard key={s.id} story={s} showImages={showImages} onChange={update} onRead={markRead} onGone={gone} />)}
         <div ref={sentinel} />
         {more && <div className="skeleton mx-auto h-8 w-40" aria-label="Loading more" />}
         {error && <p className="text-center text-sm text-red-600" role="alert">{error} <button className="underline" onClick={loadMore}>Retry</button></p>}

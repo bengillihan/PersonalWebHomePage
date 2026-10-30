@@ -12,10 +12,10 @@ import type { Refresher } from '../news/ingest.js';
 import { feedUrlFor, ingestSource, processNewArticles, type SourceRow } from '../news/ingest.js';
 import { discoverFeeds, probeFeed } from '../news/discover.js';
 import { FetchError, validateUrl } from '../net/safeFetch.js';
-import { explainStory, queryFeed } from '../news/query.js';
+import { explainStory, queryFeed, queryFrontPage } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics, LEGACY_WEIGHT, priorityForWeight } from '../news/topics.js';
-import { getPrefs, savePrefs } from '../settings.js';
+import { DEFAULT_GEO, getGeo, getPrefs, saveGeo, savePrefs } from '../settings.js';
 import { getDbIdentity, type PersistenceReport } from '../storage.js';
 import { evaluateSource, MAX_FRESHNESS_HOURS, refreshHealth } from '../news/health.js';
 import { RANGES, MarketService, type Range } from '../market/service.js';
@@ -62,6 +62,15 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     const total = (db.prepare('SELECT COUNT(*) n FROM story_clusters').get() as any).n;
     return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: getPrefs(db).showRead };
   });
+  // Front Page: one ranked pool split into a lead, secondary stories and per-section blocks, each story once (see queryFrontPage).
+  app.get('/api/frontpage', async () => {
+    refresher.maybeRefresh(); void market.refreshIfNeeded().catch(() => {});
+    const page = queryFrontPage(db);
+    const total = (db.prepare('SELECT COUNT(*) n FROM story_clusters').get() as any).n;
+    return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: getPrefs(db).showRead };
+  });
+  app.get('/api/geo', async () => ({ geo: getGeo(db), defaults: DEFAULT_GEO }));
+  app.put('/api/geo', async (req) => { const list = z.array(z.string().trim().min(1).max(60)).max(100); saveGeo(db, z.object({ local: list, localPriority: list, regional: list, washington: list }).parse(req.body)); return { geo: getGeo(db), defaults: DEFAULT_GEO }; });
   app.post('/api/refresh', heavy, async (_req, reply) => { void refresher.trigger('manual').catch(() => {}); void market.refreshIfNeeded(true).catch(() => {}); return reply.code(202).send(status()); });
 
   app.get('/api/stories/:id/why', async (req, reply) => { const { id } = idParam.parse(req.params); const w = explainStory(db, id); return w ?? reply.code(404).send({ error: 'not_found' }); });

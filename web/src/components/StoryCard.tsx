@@ -4,6 +4,8 @@ import type { Story } from '../types';
 import BlockTopicForm from './BlockTopicForm';
 
 const REASONS: [string, string][] = [['topic', 'Not interested in this topic'], ['already_knew', 'Already knew this'], ['low_importance', 'Low importance'], ['source', "Don't like this source"], ['duplicate', 'Duplicate']];
+const SHELL: Record<CardVariant, string> = { card: 'card p-4 sm:p-5', lead: 'border-b-2 border-slate-900 pb-5 dark:border-slate-100', brief: 'border-b border-slate-200 pb-3 dark:border-slate-800' };
+const HEADLINE: Record<CardVariant, string> = { card: 'text-lg font-semibold leading-snug sm:text-xl', lead: 'font-serif text-3xl font-bold leading-tight sm:text-4xl', brief: 'font-serif text-base font-semibold leading-snug sm:text-lg' };
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
   <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={d} /></svg>
 );
@@ -12,7 +14,9 @@ const DOWN = 'M17 14V3h4v11h-4zm0 0l-4 8a2 2 0 01-2-2v-4H5a2 2 0 01-2-2.3l1.3-8A
 const MARK = 'M6 3h12a1 1 0 011 1v17l-7-4-7 4V4a1 1 0 011-1z';
 const EYE_OFF = 'M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A9.8 9.8 0 0112 5c5 0 9 4 10 7a11 11 0 01-3.2 4.4M6.2 6.3A11 11 0 002 12c1 3 5 7 10 7a9.7 9.7 0 004-.9';
 
-export default function StoryCard({ story, showImages, onChange, onGone, onRead }: { story: Story; showImages: boolean; onChange: (s: Story) => void; onGone: (id: number) => void; onRead?: (s: Story, read: boolean, via: 'button' | 'link') => void }) {
+export type CardVariant = 'card' | 'lead' | 'brief';
+/** `card` is the Compact Feed card; `lead` and `brief` are the newspaper layouts (same controls, tighter type and a lead image). */
+export default function StoryCard({ story, showImages, onChange, onGone, onRead, variant = 'card' }: { variant?: CardVariant; story: Story; showImages: boolean; onChange: (s: Story) => void; onGone: (id: number) => void; onRead?: (s: Story, read: boolean, via: 'button' | 'link') => void }) {
   const [open, setOpen] = useState(false);
   const [why, setWhy] = useState(false);
   const [askReason, setAskReason] = useState(false);
@@ -36,10 +40,11 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
     if (!why && !expl) { try { setExpl(await api(`/api/stories/${story.id}/why`)); } catch { /* shown as unavailable */ } }
   };
   const summaryLabel = story.summaryKind === 'ai' ? 'AI summary' : story.summaryKind === 'excerpt' ? 'Publisher excerpt' : 'Headline only';
-  const btn = (active: boolean) => `btn btn-ghost !px-2 ${active ? '!text-indigo-600 dark:!text-indigo-400' : ''}`;
+  const btn = (active: boolean) => `btn btn-ghost ${variant === 'brief' ? '!px-1.5 !py-1' : '!px-2'} ${active ? '!text-indigo-600 dark:!text-indigo-400' : ''}`;
 
   return (
-    <article className={`card p-4 transition sm:p-5 ${effectivelyRead ? 'opacity-60 hover:opacity-100' : ''}`} aria-label={story.title}>
+    <article className={`${SHELL[variant]} transition ${effectivelyRead ? 'opacity-60 hover:opacity-100' : ''}`} aria-label={story.title}>
+      {variant === 'lead' && showImages && story.imageUrl && <img src={story.imageUrl} alt="" loading="eager" referrerPolicy="no-referrer" className="mb-3 aspect-[16/9] max-h-72 w-full rounded-sm object-cover sm:max-h-80 lg:aspect-[2/1]" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />}
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -52,34 +57,34 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead 
             {story.blockedBy.length > 0 && <span className="chip !bg-rose-100 !text-rose-800 dark:!bg-rose-900/40 dark:!text-rose-200" title="Normally hidden from your feeds (Settings → Interests → Not interested). Shown here because you searched for it or saved it.">Blocked: {story.blockedBy.join(', ')}</span>}
             {p?.aggregated && <span className="chip" title="Found via a Google News aggregator feed; the link opens through Google News">via aggregator</span>}
           </div>
-          <h2 className="text-lg font-semibold leading-snug sm:text-xl">
+          <h2 className={HEADLINE[variant]}>
             {p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={() => !effectivelyRead && setRead(true, 'link')} className="hover:text-indigo-600 hover:underline dark:hover:text-indigo-400">{story.title}</a> : story.title}
           </h2>
           {story.summary ? (
-            <p className="mt-2 text-[0.97rem] leading-relaxed text-slate-700 dark:text-slate-300">
+            <p className={`mt-2 text-slate-700 dark:text-slate-300 ${variant === 'brief' ? 'line-clamp-3 text-sm leading-snug' : variant === 'lead' ? 'text-base leading-relaxed sm:text-lg' : 'text-[0.97rem] leading-relaxed'}`}>
               {story.summary} <span className="ml-1 whitespace-nowrap text-xs text-slate-400">· {summaryLabel}</span>
             </p>
-          ) : (
+          ) : variant === 'brief' ? null : (
             <p className="mt-2 text-sm italic text-slate-500">Headline only — the publisher feed provided no excerpt, so no summary is shown.</p>
           )}
           {story.differences && open && <p className="mt-2 rounded-lg bg-slate-50 p-2.5 text-sm text-slate-600 dark:bg-slate-800/60 dark:text-slate-300"><b>Differences between sources:</b> {story.differences}</p>}
         </div>
-        {showImages && story.imageUrl && (
-          <img src={story.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="hidden h-24 w-32 flex-none rounded-xl object-cover sm:block" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+        {showImages && story.imageUrl && variant !== 'lead' && (
+          <img src={story.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className={variant === 'brief' ? 'h-16 w-20 flex-none rounded-sm object-cover' : 'hidden h-24 w-32 flex-none rounded-xl object-cover sm:block'} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
         )}
       </div>
 
-      {story.why && <p className="mt-2 text-xs text-slate-500">{story.why.reasons[0]}</p>}
+      {story.why && variant !== 'brief' && <p className="mt-2 text-xs text-slate-500">{story.why.reasons[0]}</p>}
 
-      <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2.5 dark:border-slate-800">
+      <div className={`flex flex-wrap items-center border-slate-100 dark:border-slate-800 ${variant === 'brief' ? 'mt-2 gap-0 border-t pt-1.5' : 'mt-3 gap-1 border-t pt-2.5'}`}>
         <button className={btn(story.rating === 1)} aria-pressed={story.rating === 1} aria-label="Thumbs up" title="More like this" onClick={() => rate(story.rating === 1 ? 0 : 1)}><Icon d={UP} fill={story.rating === 1} /></button>
         <button className={btn(story.rating === -1)} aria-pressed={story.rating === -1} aria-label="Thumbs down" title="Less like this" onClick={() => (story.rating === -1 ? rate(0) : (setAskReason(true), rate(-1)))}><Icon d={DOWN} fill={story.rating === -1} /></button>
         <button className={btn(story.bookmarked)} aria-pressed={story.bookmarked} aria-label="Bookmark" title="Save" onClick={() => run(() => api(`/api/stories/${story.id}/bookmark`, { method: 'POST', body: { on: !story.bookmarked } }), { bookmarked: !story.bookmarked })}><Icon d={MARK} fill={story.bookmarked} /></button>
         <button className="btn btn-ghost !px-2" aria-label="Hide story" title="Hide" onClick={() => run(() => api(`/api/stories/${story.id}/hide`, { method: 'POST', body: { hidden: true } }), {}).then(() => onGone(story.id))}><Icon d={EYE_OFF} /></button>
-        <button className="btn btn-ghost text-xs" onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
+        <button className={`btn btn-ghost text-xs ${variant === 'brief' ? '!px-1.5 !py-1' : ''}`} onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
         <span className="flex-1" />
-        <button className="btn btn-ghost text-xs" onClick={toggleWhy} aria-expanded={why}>Why recommended?</button>
-        {story.sourceCount + story.mutedSources > 1 && <button className="btn btn-outline text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : `See coverage from ${story.sourceCount} ${story.sourceCount === 1 ? 'source' : 'sources'}${story.mutedSources > 0 ? ` (+${story.mutedSources} muted)` : ''}`}</button>}
+        <button className={`btn btn-ghost text-xs ${variant === 'brief' ? '!px-1.5 !py-1' : ''}`} onClick={toggleWhy} aria-expanded={why} aria-label="Why recommended?">{variant === 'brief' ? 'Why?' : 'Why recommended?'}</button>
+        {story.sourceCount + story.mutedSources > 1 && <button className={`btn btn-outline text-xs ${variant === 'brief' ? '!px-2 !py-0.5' : ''}`} onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : variant === 'brief' ? `Coverage (${story.sourceCount + story.mutedSources})` : `See coverage from ${story.sourceCount} ${story.sourceCount === 1 ? 'source' : 'sources'}${story.mutedSources > 0 ? ` (+${story.mutedSources} muted)` : ''}`}</button>}
       </div>
 
       {askReason && story.rating === -1 && (

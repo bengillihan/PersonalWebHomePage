@@ -3,6 +3,8 @@ import { getPrefs } from '../settings.js';
 import { balanceFeed, buildFeedbackModel, INTEREST_MATCH, scoreCandidate, type Candidate, type Scored } from './rank.js';
 import { loadTopics, weightFactor } from './topics.js';
 import { isUsableSummary } from './cluster.js';
+import { classify, isSection, SECTIONS, SECTION_LABEL, LOCAL_PRIORITY_BOOST, type Section } from './sections.js';
+import { getGeo } from '../settings.js';
 
 export interface FeedQuery { tab: string; q?: string; topic?: string; cursor?: string; limit?: number }
 export interface StoryDto {
@@ -51,23 +53,41 @@ const BASE_SELECT = `SELECT c.id, c.title, c.summary, c.summary_kind, c.differen
   LEFT JOIN bookmarks b ON b.cluster_id = c.id
   LEFT JOIN feedback f ON f.cluster_id = c.id`;
 
+
+/**
+ * Filters shared by every feed (including the Front Page): retention, eligibility with blocked topics and muted publishers, hidden stories, and
+ * "hide read stories". Saved keeps every bookmark; search keeps read stories findable. `where[0]` is always the recency bound.
+ */
+function commonFilters(prefs: ReturnType<typeof getPrefs>, tab: string, feedView: boolean, searching: boolean, where: string[], params: any[]) {
+  const cutoff = Date.now() - prefs.retentionDays * 86_400_000;
+  const muted = prefs.mutedPublishers.map(normName).filter(Boolean);
+  if (tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(eligibleSql(feedView, feedView ? muted.length : 0)); if (feedView) params.push(...muted); } // Saved always shows every bookmark
+  if (tab !== 'saved') where.push('rs.hidden_at IS NULL');
+  if (tab === 'unread') where.push('rs.read_at IS NULL'); // strictly unread
+  // Read stories are hidden from the main feeds unless 'Show read stories' is on. Never hidden in Saved, in Unread's own rule above, or in
+  // search (so previously viewed articles stay findable). Read is per story (cluster); a story reappears, marked Updated, when it gained
+  // substantial new information after being read (updated_at is bumped by new coverage, material corrections and merges, not by cosmetic edits).
+  if (!prefs.showRead && !['saved', 'unread'].includes(tab) && !searching) where.push('(rs.read_at IS NULL OR c.updated_at > rs.read_at)');
+}
+
+/** The stories of one section, best first: the usual relevance score (recency included), with the user's closest places lifted within Local. */
+function sectionOrder(scored: Scored[], rows: any[], section: Section, geo: ReturnType<typeof getGeo>): Scored[] {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return scored.flatMap((s) => {
+    if (s.c.rating === -1 || (s.c.excluded && s.bucket !== 'major')) return []; // same drops as the For You feed
+    const r = byId.get(s.c.id); const cls = classify({ category: r.category, title: r.title, summary: r.summary, localSource: s.c.isLocal }, geo);
+    return cls.sections.has(section) ? [{ s, adj: s.score + (section === 'local' && cls.localPriority ? LOCAL_PRIORITY_BOOST : 0) }] : [];
+  }).sort((a, b) => b.adj - a.adj).map((x) => x.s);
+}
+
 export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   const limit = Math.min(Math.max(fq.limit ?? 20, 1), 50);
   const prefs = getPrefs(db);
   const where: string[] = []; const params: any[] = [];
   const cutoff = Date.now() - prefs.retentionDays * 86_400_000;
-  // Saved lists every bookmark regardless of age (pruneOldData also keeps bookmarked stories); all other tabs honor retention.
   const feedView = !(fq.q ?? '').trim(); // exclusions (blocked topics, muted publishers) apply to the feeds, never to explicit search or Saved
-  const muted = prefs.mutedPublishers.map(normName).filter(Boolean);
-  if (fq.tab !== 'saved') { where.push('c.last_published_at >= ?'); params.push(cutoff); where.push(eligibleSql(feedView, feedView ? muted.length : 0)); if (feedView) params.push(...muted); } // Saved always shows every bookmark
-  if (fq.tab !== 'saved') where.push('rs.hidden_at IS NULL');
-  if (fq.tab === 'unread') where.push('rs.read_at IS NULL'); // strictly unread
-  // Read stories are hidden from the main feeds unless 'Show read stories' is on. Never hidden in Saved, in Unread's own rule above, or in
-  // search (so previously viewed articles stay findable). Read is per story (cluster); a story reappears, marked Updated, when it gained
-  // substantial new information after being read (updated_at is bumped by new coverage, material corrections and merges, not by cosmetic edits).
-  if (!prefs.showRead && !['saved', 'unread'].includes(fq.tab) && !(fq.q ?? '').trim()) where.push('(rs.read_at IS NULL OR c.updated_at > rs.read_at)');
+  commonFilters(prefs, fq.tab, feedView, !!(fq.q ?? '').trim(), where, params);
   if (fq.tab === 'saved') where.push('b.cluster_id IS NOT NULL');
-  if (fq.tab === 'local') where.push(`(c.category = 'Local' OR EXISTS (SELECT 1 FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.cluster_id = c.id AND s.is_local = 1))`);
   if (fq.tab === 'topic' && fq.topic) {
     const t = loadTopics(db).find((x) => x.name === fq.topic);
     if (t?.kind === 'interest') { where.push('EXISTS (SELECT 1 FROM article_topics att JOIN articles a ON a.id = att.article_id WHERE a.cluster_id = c.id AND att.topic_id = ?)'); params.push(t.id); }
@@ -79,7 +99,8 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
     params.push(like, like, like, like, like);
   }
 
-  const ranked = (fq.tab === 'foryou' || fq.tab === 'explore') && !(fq.q ?? '').trim();
+  const section = feedView && isSection(fq.tab) ? fq.tab : null; // newspaper sections are picked from the ranked pool, so they page like For You
+  const ranked = (fq.tab === 'foryou' || fq.tab === 'explore' || section !== null) && !(fq.q ?? '').trim();
   if (!ranked) {
     const cur = dec(fq.cursor);
     if (cur) { where.push('(c.last_published_at < ? OR (c.last_published_at = ? AND c.id < ?))'); params.push(cur.t, cur.t, cur.i); }
@@ -105,6 +126,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
     const scored = scoreRows(db, pool);
     const ordered: Scored[] = fq.tab === 'explore'
       ? scored.filter((s) => s.c.interestScore < 0.1 && !s.c.excluded && s.c.rating !== -1 && (s.parts.feedback >= 0.35)).sort((a, b) => b.c.importance * b.parts.recency - a.c.importance * a.parts.recency)
+      : section ? sectionOrder(scored, pool, section, getGeo(db))
       : balanceFeed(scored, prefs.quotas);
     remaining = ordered.map((s) => s.c.id); total = ordered.length;
   }
@@ -118,6 +140,36 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   const next = remaining.slice(pos);
   const why = new Map(scoreRows(db, page).map((s) => [s.c.id, s]));
   return { items: hydrate(db, page, why, prefs.mutedPublishers), nextCursor: next.length ? enc({ r: next, t: total }) : null, total };
+}
+
+export interface FrontPage { lead: StoryDto | null; secondary: StoryDto[]; sections: { key: Section | 'more'; label: string; items: StoryDto[] }[] }
+export const FRONT = { secondary: 6, perSection: 4, more: 4 } as const;
+
+/**
+ * The Front Page, built from ONE ranked pool (the same filters, scoring and snapshot ordering as For You), so it costs about one feed request:
+ * a lead story (relevance and importance), secondary stories, then one block per section. Every story appears once: whatever the lead or an
+ * earlier block took is skipped by the later ones. Nothing here calls Gemini.
+ */
+export function queryFrontPage(db: DB): FrontPage {
+  const prefs = getPrefs(db); const geo = getGeo(db);
+  const where: string[] = []; const params: any[] = [];
+  commonFilters(prefs, 'foryou', true, false, where, params);
+  params[0] = Math.max(params[0], Date.now() - 14 * 86_400_000);
+  const pool = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} ORDER BY c.last_published_at DESC LIMIT ${SNAPSHOT_MAX}`).all(...params) as any[];
+  const scored = scoreRows(db, pool);
+  const ordered = balanceFeed(scored, prefs.quotas);
+  const used = new Set<number>();
+  const take = (list: Scored[], n: number) => { const out: Scored[] = []; for (const s of list) { if (out.length >= n) break; if (!used.has(s.c.id)) { used.add(s.c.id); out.push(s); } } return out; };
+  const lead = take([...ordered].sort((a, b) => (b.score * 0.6 + b.parts.importance * 0.4) - (a.score * 0.6 + a.parts.importance * 0.4)), 1);
+  const secondary = take(ordered, FRONT.secondary);
+  const blocks = SECTIONS.map((key) => ({ key, picks: take(sectionOrder(scored, pool, key, geo), FRONT.perSection) })).filter((b) => b.picks.length);
+  // Stories that belong to no section (Health, Science, Automotive, Entertainment, ...) would otherwise be reachable only from Compact Feed.
+  const rows = new Map(pool.map((r) => [r.id, r]));
+  const unsectioned = ordered.filter((s) => { const r = rows.get(s.c.id); return classify({ category: r.category, title: r.title, summary: r.summary, localSource: s.c.isLocal }, geo).sections.size === 0; });
+  const more = take(unsectioned, FRONT.more);
+  const why = new Map([...lead, ...secondary, ...blocks.flatMap((b) => b.picks), ...more].map((x) => [x.c.id, x]));
+  const dto = (picks: Scored[]) => hydrate(db, picks.map((x) => rows.get(x.c.id)), why, prefs.mutedPublishers);
+  return { lead: dto(lead)[0] ?? null, secondary: dto(secondary), sections: [...blocks.map((b) => ({ key: b.key, label: SECTION_LABEL[b.key], items: dto(b.picks) })), ...(more.length ? [{ key: 'more' as const, label: 'More stories', items: dto(more) }] : [])] };
 }
 
 function scoreRows(db: DB, rows: any[]): Scored[] {

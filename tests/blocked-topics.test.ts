@@ -90,8 +90,8 @@ describe('article matching rules', () => {
 describe('hard exclusions in the feeds', () => {
   it('REGRESSION: a hockey article from a comprehensive source is hidden in For You, Latest, Local, Explore, Unread and category feeds, but kept in SQLite', () => {
     const general = src('General News'), local = src('Local News', { local: true }); block('Hockey / NHL');
-    const keep = story(general, 'City council approves new park budget', { ai: 'Business' }), keepLocal = story(local, 'Library hours extended for summer');
-    const hockey = story(general, 'Seattle Kraken rally past Canucks in overtime', { ai: 'Business' }), hockeyLocal = story(local, 'Hockey fans pack the downtown arena');
+    const keep = story(general, 'City council approves new park budget', { ai: 'Business' }), keepLocal = story(local, 'Library hours extended for summer', { ai: 'Local' });
+    const hockey = story(general, 'Seattle Kraken rally past Canucks in overtime', { ai: 'Business' }), hockeyLocal = story(local, 'Hockey fans pack the downtown arena', { ai: 'Local' });
     for (const tab of ['foryou', 'latest', 'explore', 'unread']) expect(ids(tab), tab).toEqual(asc(keep.cluster, keepLocal.cluster));
     expect(ids('local')).toEqual([keepLocal.cluster]);
     expect(ids('topic', { topic: 'Business' })).toEqual([keep.cluster]);

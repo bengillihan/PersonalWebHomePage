@@ -41,7 +41,7 @@ describe('read stories are hidden from the main feeds by default', () => {
     const general = src('General'), local = src('Local News', { local: true });
     return {
       unread: story(general, 'Unread business story', { ai: 'Business' }), read: story(general, 'Read business story', { ai: 'Business' }),
-      unreadLocal: story(local, 'Unread local story'), readLocal: story(local, 'Read local story'),
+      unreadLocal: story(local, 'Unread local story', { ai: 'Local' }), readLocal: story(local, 'Read local story', { ai: 'Local' }),
     };
   }
 

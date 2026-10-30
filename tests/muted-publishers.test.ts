@@ -30,7 +30,7 @@ beforeEach(() => { db = memDb(); });
 describe('a muted publisher is excluded from normal feeds, not just ranked lower', () => {
   it('REGRESSION: a muted publisher\'s stories vanish from For You, Latest, Local, Explore, Unread and category tabs, and stay in SQLite', () => {
     const loud = src('Loud Blog'), loudLocal = src('Loud Local', { local: true }), fine = src('General'), fineLocal = src('Calm Local', { local: true });
-    const a = story(loud, 'Muted general story', { ai: 'Business' }), b = story(loudLocal, 'Muted local story'), ok = story(fine, 'Good story', { ai: 'Business' }), okLocal = story(fineLocal, 'Good local story');
+    const a = story(loud, 'Muted general story', { ai: 'Business' }), b = story(loudLocal, 'Muted local story', { ai: 'Local' }), ok = story(fine, 'Good story', { ai: 'Business' }), okLocal = story(fineLocal, 'Good local story', { ai: 'Local' });
     mute('Loud Blog', 'Loud Local');
     for (const tab of ['foryou', 'latest', 'explore', 'unread']) expect(ids(tab), tab).toEqual(asc(ok.cluster, okLocal.cluster));
     expect(ids('local')).toEqual([okLocal.cluster]); expect(ids('topic', { topic: 'Business' })).toEqual([ok.cluster]);

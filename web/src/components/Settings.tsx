@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, fullDate, timeAgo } from '../api';
-import type { BlockedTopic, Prefs, Quote, Source, Story, Topic } from '../types';
+import type { BlockedTopic, GeoPrefs, Prefs, Quote, Source, Story, Topic } from '../types';
 import StoryCard from './StoryCard';
 
-export const PANELS: [string, string][] = [['sources', 'Sources'], ['interests', 'Interests'], ['watchlist', 'Watchlist'], ['saved', 'Saved'], ['preferences', 'Preferences'], ['diagnostics', 'Diagnostics']];
+export const PANELS: [string, string][] = [['sources', 'Sources'], ['interests', 'Interests'], ['geography', 'Geography'], ['watchlist', 'Watchlist'], ['saved', 'Saved'], ['preferences', 'Preferences'], ['diagnostics', 'Diagnostics']];
 
 const Field = ({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) => (
   <label className="block text-sm"><span className="mb-1 block font-medium">{label}</span>{children}{hint && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}</label>
@@ -26,6 +26,7 @@ export default function Settings({ panel, setPanel, onClose, onChanged, onTheme 
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
             {panel === 'sources' && <Sources onChanged={onChanged} />}
             {panel === 'interests' && <Interests onChanged={onChanged} />}
+            {panel === 'geography' && <Geography onChanged={onChanged} />}
             {panel === 'watchlist' && <Watchlist onChanged={onChanged} />}
             {panel === 'saved' && <Saved />}
             {panel === 'preferences' && <Preferences onChanged={onChanged} onTheme={onTheme} />}
@@ -210,6 +211,36 @@ function Saved() {
   if (!items) return <div className="skeleton h-24 w-full" />;
   return <div className="space-y-4"><h3 className="text-base font-semibold">Saved stories</h3>{items.length === 0 && <p className="text-sm text-slate-500">Nothing saved yet.</p>}
     {items.map((s) => <StoryCard key={s.id} story={s} showImages={false} onChange={(n) => setItems((p) => p!.map((x) => (x.id === n.id ? n : x)))} onGone={(id) => setItems((p) => p!.filter((x) => x.id !== id))} />)}</div>;
+}
+
+/* ---------------- Geography ---------------- */
+const GEO_FIELDS: [keyof GeoPrefs, string, string][] = [
+  ['local', 'Local', 'Your closest communities (e.g. Des Moines, Federal Way, SeaTac, Kent, Burien, Normandy Park and South King County).'],
+  ['localPriority', 'Local priority', 'Places inside Local whose stories are lifted to the top of the Local section.'],
+  ['regional', 'Regional', 'Greater Seattle and the Puget Sound area: Bellevue, Tacoma, Everett and King, Pierce and Snohomish counties.'],
+  ['washington', 'Washington', 'Statewide news: Olympia, the legislature, state government, taxes and major projects across the state.'],
+];
+function Geography({ onChanged }: { onChanged: () => void }) {
+  const { data, reload } = useLoad<{ geo: GeoPrefs; defaults: GeoPrefs }>('/api/geo');
+  const [g, setG] = useState<Record<keyof GeoPrefs, string> | null>(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState<string | null>(null);
+  const text = (geo: GeoPrefs) => Object.fromEntries(GEO_FIELDS.map(([k]) => [k, geo[k].join(', ')])) as Record<keyof GeoPrefs, string>;
+  useEffect(() => { if (data) setG(text(data.geo)); }, [data]);
+  if (!g || !data) return <div className="skeleton h-40 w-full" />;
+  const save = async (body: GeoPrefs) => { try { await api('/api/geo', { method: 'PUT', body }); setErr(null); setSaved(true); setTimeout(() => setSaved(false), 1500); await reload(); onChanged(); } catch (e) { setErr((e as Error).message); } };
+  return (
+    <div className="space-y-5">
+      <div><h3 className="text-base font-semibold">Geography</h3><p className="text-sm text-slate-500">A story is placed by the places named in its headline and summary, not by where its publisher is, so it can appear in more than one section. Separate places with commas. Changes apply immediately; nothing is re-fetched.</p></div>
+      <div className="card space-y-4 p-4">
+        {GEO_FIELDS.map(([k, label, hint]) => <Field key={k} label={label} hint={hint}><textarea className="input min-h-[4.5rem]" value={g[k]} onChange={(e) => setG({ ...g, [k]: e.target.value })} /></Field>)}
+        {err && <p className="text-sm text-red-600" role="alert">{err}</p>}
+        <div className="flex items-center gap-2">
+          <button className="btn btn-primary" onClick={() => save(Object.fromEntries(GEO_FIELDS.map(([k]) => [k, csv(g[k])])) as unknown as GeoPrefs)}>Save</button>
+          <button className="btn btn-outline" onClick={() => { setG(text(data.defaults)); void save(data.defaults); }}>Reset to defaults</button>
+          {saved && <span className="text-sm text-emerald-600" role="status">Saved</span>}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ---------------- Preferences ---------------- */

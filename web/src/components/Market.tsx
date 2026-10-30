@@ -7,7 +7,8 @@ interface MarketResponse { provider: { name: string; configured: boolean }; quot
 const RANGES = ['1D', '1W', '1M', 'YTD', '1Y'];
 const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export default function Market({ version, onOpenSettings }: { version: number; onOpenSettings: (p: string) => void }) {
+/** `compact` shrinks the watchlist tiles for the newspaper Front Page; the chart panel still opens on click. */
+export default function Market({ version, onOpenSettings, compact = false }: { version: number; onOpenSettings: (p: string) => void; compact?: boolean }) {
   const [data, setData] = useState<MarketResponse | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [range, setRange] = useState('1M');
@@ -25,7 +26,7 @@ export default function Market({ version, onOpenSettings }: { version: number; o
   const noKey = !data.provider.configured;
 
   return (
-    <section aria-label="Market watchlist" className="card p-3">
+    <section aria-label="Market watchlist" className={`card ${compact ? 'p-2' : 'p-3'}`}>
       <div className="flex items-center justify-between px-1 pb-2 text-xs text-slate-500">
         <span>Markets · {data.provider.name}{data.refreshing && ' · updating…'}</span>
         <span>{data.lastFetchedAt ? `prices fetched ${timeAgo(data.lastFetchedAt)}` : 'no prices yet'}</span>
@@ -37,7 +38,7 @@ export default function Market({ version, onOpenSettings }: { version: number; o
           const up = (d?.change ?? 0) >= 0;
           return (
             <button key={x.symbol} onClick={() => setSel(sel === x.symbol ? null : x.symbol)} aria-pressed={sel === x.symbol}
-              className={`min-w-[9.5rem] flex-none rounded-xl border px-3 py-2 text-left transition ${sel === x.symbol ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60'}`}>
+              className={`${compact ? 'min-w-[7.5rem] px-2 py-1' : 'min-w-[9.5rem] px-3 py-2'} flex-none rounded-xl border text-left transition ${sel === x.symbol ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60'}`}>
               <div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{x.symbol}</span>{x.isDailyNav && <span className="text-[10px] uppercase tracking-wide text-slate-400">NAV</span>}</div>
               {x.last != null ? (<>
                 <div className="text-base font-semibold tabular-nums">{fmt(x.last)}</div>

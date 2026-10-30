@@ -5,7 +5,8 @@ import type { WeatherLocation, WeatherView } from '../types';
 const dayLabel = (date: string, i: number) => (i === 0 ? 'Today' : new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' }));
 const shortDate = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
 
-export default function Weather({ version }: { version: number }) {
+/** `card` is the compact-feed card; `strip` is a one-line summary for the Front Page; `expanded` is the dedicated Weather section. */
+export default function Weather({ version, variant = 'card', onOpen }: { version: number; variant?: 'card' | 'strip' | 'expanded'; onOpen?: () => void }) {
   const [w, setW] = useState<WeatherView | null>(null);
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -35,9 +36,21 @@ export default function Weather({ version }: { version: number }) {
 
   if (!w) return failed ? null : <div className="card flex gap-3 p-3">{[0, 1, 2, 3, 4].map((i) => <div key={i} className="skeleton h-16 flex-1" />)}</div>;
   const f = w.forecast;
+  if (variant === 'strip') {
+    const today = f?.days[0];
+    return !f ? null : (
+      <section aria-label="Weather summary" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-y border-slate-200 px-1 py-1.5 text-sm dark:border-slate-800">
+        <b className="font-semibold">{w.location.label}</b><span>{f.current.icon} {f.current.tempF}°F · {f.current.description}</span>
+        {today && <span className="text-slate-500">High {today.highF}° · Low {today.lowF}°{today.precipPct != null ? ` · 💧 ${today.precipPct}%` : ''}</span>}
+        <span className="flex-1" />{onOpen && <button className="text-xs underline hover:text-indigo-600" onClick={onOpen}>5-day forecast →</button>}
+      </section>
+    );
+  }
+  const big = variant === 'expanded';
 
   return (
-    <section aria-label="5-day weather forecast" className="card p-3">
+    <section aria-label="5-day weather forecast" className={`card ${big ? 'p-4 sm:p-6' : 'p-3'}`}>
+      {big && <h2 className="mb-2 border-b border-slate-300 pb-2 font-serif text-2xl font-bold dark:border-slate-700">Weather{f ? <span className="ml-3 text-base font-normal text-slate-500">{f.current.icon} {f.current.tempF}°F now in {w.location.label}</span> : null}</h2>}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 pb-2 text-xs text-slate-500">
         <span className="min-w-0 truncate"><b className="font-semibold text-slate-700 dark:text-slate-200">{w.location.label}</b>
           {f && <> · <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">{f.current.icon} {f.current.tempF}°F</span> {f.current.description}</>}</span>
@@ -57,14 +70,14 @@ export default function Weather({ version }: { version: number }) {
       )}
 
       {f ? (
-        <div className="flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-5 sm:overflow-visible">
+        <div className={`flex overflow-x-auto pb-1 sm:grid sm:grid-cols-5 sm:overflow-visible ${big ? 'gap-3' : 'gap-2'}`}>
           {f.days.map((d, i) => (
-            <div key={d.date} className="min-w-[6.5rem] flex-none rounded-xl border border-slate-200 px-2.5 py-2 text-center dark:border-slate-800 sm:min-w-0" title={`${d.description}${d.precipPct != null ? `, ${d.precipPct}% chance of precipitation` : ''}`}>
+            <div key={d.date} className={`flex-none rounded-xl border border-slate-200 text-center dark:border-slate-800 sm:min-w-0 ${big ? 'min-w-[8rem] px-3 py-4' : 'min-w-[6.5rem] px-2.5 py-2'}`} title={`${d.description}${d.precipPct != null ? `, ${d.precipPct}% chance of precipitation` : ''}`}>
               <div className="text-sm font-semibold">{dayLabel(d.date, i)} <span className="text-xs font-normal text-slate-400">{shortDate(d.date)}</span></div>
-              <div className="text-2xl leading-8" aria-hidden>{d.icon}</div>
+              <div className={big ? 'text-4xl leading-[3rem]' : 'text-2xl leading-8'} aria-hidden>{d.icon}</div>
               <div className="text-sm tabular-nums"><b>{d.highF}°</b> <span className="text-slate-500">{d.lowF}°</span></div>
               <div className="text-xs text-sky-700 tabular-nums dark:text-sky-300">💧 {d.precipPct != null ? `${d.precipPct}%` : '—'}</div>
-              <div className="truncate text-xs text-slate-500">{d.description}</div>
+              <div className={`text-xs text-slate-500 ${big ? '' : 'truncate'}`}>{d.description}</div>
             </div>
           ))}
         </div>
