@@ -7,7 +7,8 @@ import { getPrefs } from '../settings.js';
 import { cleanAggregatorItem, googleNewsFeedUrl, itemOnDomain, parseFeed, type FeedItem } from './feed.js';
 import { refreshHealth } from './health.js';
 import { canonicalizeUrl, normalizeTitle, sha1, sha256 } from './normalize.js';
-import { clusterArticles, clusterContentHash, isUsableSummary, recomputeCluster } from './cluster.js';
+import { clusterArticles, clusterContentHash, isUsableSummary, judgeJoin, recomputeCluster } from './cluster.js';
+import { expireChecksFor } from './novelty-checks.js';
 import { indexArticleTopics, loadTopics } from './topics.js';
 import { indexArticleBlocks } from './blocking.js';
 import { sentencesFallback } from './summary.js';
@@ -60,11 +61,18 @@ function applyCorrection(db: DB, ex: ExistingArticle, item: FeedItem, contentHas
   const clusterHashBefore = clusterContentHash(hashes());
   db.prepare('UPDATE articles SET title=?, title_norm=?, excerpt=?, content_hash=?, availability=?, summary=?, summary_kind=?, ai_content_hash=? WHERE id=?')
     .run(item.title, normalizeTitle(item.title), item.excerpt, contentHash, item.excerpt ? 'excerpt' : 'headline_only', summary, kind, aiHash, ex.id);
+  expireChecksFor(db, ex.id); // questions asked about the old wording no longer apply
+  if (item.access) db.prepare('UPDATE articles SET access = ? WHERE id = ?').run(item.access, ex.id); // explicit metadata only; never cleared or inferred
   if (ex.cluster_id && !material) { // cosmetic edit: the consolidated summary is still valid, so move its content marker instead of discarding it
     db.prepare('UPDATE story_clusters SET summary_hash=? WHERE id=? AND summary_hash=?').run(clusterContentHash(hashes()), ex.cluster_id, clusterHashBefore);
   }
   if (ex.cluster_id) {
-    recomputeCluster(db, ex.cluster_id, material, material); // refreshes title/primary; single-article clusters also take the new summary
+    // Three separate questions: did the source text change (yes, we are here), does the cached summary/classification need refreshing (`material`: any change in
+    // wording), and did a genuinely NEW DEVELOPMENT happen (`substantive`: only if the novelty rules, comparing the corrected text with what the article said before
+    // and with the rest of the story, say so; ambiguous cases become durable pending checks). A cosmetic or clarifying edit never reopens a read story.
+    const publisher = (db.prepare('SELECT publisher FROM articles WHERE id = ?').get(ex.id) as { publisher: string }).publisher;
+    const substantive = material && judgeJoin(db, ex.cluster_id, ex.id, { eventAt: Date.now(), earlier: [{ publisher, title: ex.title, excerpt: ex.excerpt, hash: ex.content_hash }] });
+    recomputeCluster(db, ex.cluster_id, material, substantive); // refreshes title/primary; single-article clusters also take the new summary
     if (material) { // a consolidated multi-source summary was written from the old text: fall back to the primary's summary until AI regenerates it
       db.prepare(`UPDATE story_clusters SET differences=NULL, summary_hash=NULL,
         summary=(SELECT summary FROM articles WHERE id = story_clusters.primary_article_id),
@@ -112,8 +120,8 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
     const seen = new Set<string>(); // in-batch duplicates (same canonical URL twice in one feed)
     const find = db.prepare('SELECT id, source_id, title, excerpt, content_hash, cluster_id, summary, summary_kind, ai_content_hash FROM articles WHERE canonical_hash = ?');
     const link = db.prepare('INSERT OR IGNORE INTO article_sources (article_id, source_id, first_seen_at) VALUES (?,?,?)'); // every feed that carries an article
-    const insert = db.prepare(`INSERT INTO articles (source_id, guid, url, canonical_url, canonical_hash, publisher, title, title_norm, excerpt, image_url, published_at, fetched_at, content_hash, availability, importance)
-      VALUES (@source_id,@guid,@url,@canonical_url,@canonical_hash,@publisher,@title,@title_norm,@excerpt,@image_url,@published_at,@fetched_at,@content_hash,@availability,@importance)`);
+    const insert = db.prepare(`INSERT INTO articles (source_id, guid, url, canonical_url, canonical_hash, publisher, title, title_norm, excerpt, image_url, access, published_at, fetched_at, content_hash, availability, importance)
+      VALUES (@source_id,@guid,@url,@canonical_url,@canonical_hash,@publisher,@title,@title_norm,@excerpt,@image_url,@access,@published_at,@fetched_at,@content_hash,@availability,@importance)`);
     db.transaction(() => {
       let position = 0;
       for (const raw of feed.items) {
@@ -143,7 +151,7 @@ export async function ingestSource(deps: IngestDeps, s: SourceRow, now = Date.no
         position++;
         const r = insert.run({
           source_id: s.id, guid: item.guid, url: item.url, canonical_url: canonical, canonical_hash: hash, publisher: item.publisher ?? s.name,
-          title: item.title, title_norm: normalizeTitle(item.title), excerpt: item.excerpt, image_url: item.imageUrl,
+          title: item.title, title_norm: normalizeTitle(item.title), excerpt: item.excerpt, image_url: item.imageUrl, access: item.access ?? null,
           published_at: item.publishedAt, fetched_at: now, content_hash: contentHash, availability: item.excerpt ? 'excerpt' : 'headline_only', importance,
         });
         link.run(Number(r.lastInsertRowid), s.id, now);

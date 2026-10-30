@@ -104,3 +104,15 @@ describe('weather strip freshness', () => {
     await mountWeather(view({ forecast: null, fetchedAt: null, error: 'unreachable' }), false); expect(await screen.findByText(/Weather unavailable: unreachable/)).toBeTruthy();
   });
 });
+
+describe('access labels', () => {
+  const acc = (label: string | null, level: any = 'paywalled', basis: any = 'publisher') => ({ level, basis, label });
+  it('shows a concise label beside the primary source and beside every source in Coverage; nothing for unknown', () => {
+    const s = story({ primary: { publisher: 'Alpha', url: 'https://example.com/1', aggregated: false, access: acc('Likely paywall') },
+      articles: [{ ...story().articles[0], access: acc('Likely paywall') }, { ...story().articles[1], access: acc(null, 'unknown', 'none') }, { id: 3, publisher: 'Gamma', title: 'C', url: 'https://example.com/c', publishedAt: 1, aggregated: false, alsoVia: [], muted: false, access: acc('Free', 'free', 'article') }], sourceCount: 3 });
+    mount(s); expect(within(card()).getAllByText('Likely paywall')).toHaveLength(1);
+    fireEvent.click(within(open()).getByRole('menuitem', { name: /Coverage/ }));
+    expect(within(card()).getAllByText('Likely paywall')).toHaveLength(2); expect(within(card()).getByText('Free')).toBeTruthy(); expect(within(card()).queryByText(/unknown/i)).toBeNull();
+  });
+  it('tolerates a story without access data (older payloads)', () => { mount(story()); expect(within(card()).queryByText(/paywall|Free|Metered/)).toBeNull(); });
+});

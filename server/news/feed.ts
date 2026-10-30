@@ -10,6 +10,8 @@ export interface FeedItem {
   imageUrl: string | null;
   publisher: string | null;
   publisherUrl: string | null;
+  /** Explicit access stated by the feed item itself (schema.org isAccessibleForFree); null = not stated. Never inferred. */
+  access: 'free' | 'paywalled' | null;
 }
 export interface ParsedFeed { format: 'rss' | 'atom'; title: string; items: FeedItem[]; undated: number }
 
@@ -46,6 +48,12 @@ function parseDate(v: any, now: number): number | null {
   return t;
 }
 
+function accessOf(it: any): 'free' | 'paywalled' | null {
+  const raw = it?.isAccessibleForFree ?? it?.['schema:isAccessibleForFree'] ?? it?.['s:isAccessibleForFree'];
+  const v = String(typeof raw === 'object' && raw !== null ? raw['#text'] ?? '' : raw ?? '').trim().toLowerCase();
+  return v === 'true' ? 'free' : v === 'false' ? 'paywalled' : null;
+}
+
 function image(it: any): string | null {
   const cands: any[] = [it['media:thumbnail'], it['media:content'], it['media:group']?.['media:content'], it.enclosure].flat().filter(Boolean);
   for (const c of cands) {
@@ -67,7 +75,7 @@ function fromRss(channel: any, rdfItems: any[] | undefined, now: number): Parsed
     if (publishedAt == null) { undated++; continue; }
     const body = stripHtml(txt(it.description) || txt(it['content:encoded']));
     const src = it.source;
-    items.push({ guid: txt(it.guid) || null, title, url, publishedAt, excerpt: body ? body.slice(0, EXCERPT_MAX) : null, imageUrl: image(it), publisher: src ? stripHtml(txt(src)) || null : null, publisherUrl: src?.['@_url'] ?? null });
+    items.push({ guid: txt(it.guid) || null, title, url, publishedAt, excerpt: body ? body.slice(0, EXCERPT_MAX) : null, imageUrl: image(it), publisher: src ? stripHtml(txt(src)) || null : null, publisherUrl: src?.['@_url'] ?? null, access: accessOf(it) });
   }
   return { format: 'rss', title: stripHtml(txt(channel.title)), items, undated };
 }
@@ -83,7 +91,7 @@ function fromAtom(feed: any, now: number): ParsedFeed {
     const publishedAt = parseDate(e.published ?? e.updated, now);
     if (publishedAt == null) { undated++; continue; }
     const body = stripHtml(txt(e.summary) || txt(e.content));
-    items.push({ guid: txt(e.id) || null, title, url, publishedAt, excerpt: body ? body.slice(0, EXCERPT_MAX) : null, imageUrl: image(e), publisher: null, publisherUrl: null });
+    items.push({ guid: txt(e.id) || null, title, url, publishedAt, excerpt: body ? body.slice(0, EXCERPT_MAX) : null, imageUrl: image(e), publisher: null, publisherUrl: null, access: accessOf(e) });
   }
   return { format: 'atom', title: stripHtml(txt(feed.title)), items, undated };
 }

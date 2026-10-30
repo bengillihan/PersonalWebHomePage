@@ -59,12 +59,13 @@ describe('publisher corrections reach the dashboard', () => {
     set('/c1', [{ title: 'Mayor Smith to resign in March; state opens investigation', link, date: hoursAgo(3), desc: LONG_B }]);
     await refresh(db, null);
 
-    const feed = queryFeed(db, { tab: 'latest' }).items;
+    expect(queryFeed(db, { tab: 'latest' }).items).toEqual([]); // read, and not reopened (see below)
+    const feed = queryFeed(db, { tab: 'latest', q: 'Mayor' }).items; // search always finds it
     expect(feed).toHaveLength(1);
     expect(feed[0].title).toBe('Mayor Smith to resign in March; state opens investigation'); // what the dashboard shows
     expect(feed[0].summary).toContain('will step down in March'); expect(feed[0].summary).not.toContain('end of the month');
     expect(feed[0].summaryKind).toBe('excerpt'); expect(feed[0].articles[0].title).toBe(feed[0].title);
-    expect(feed[0].isUpdated).toBe(true); expect(cluster(db).updated_at).toBeGreaterThan(before.updated_at);
+    expect(feed[0].isUpdated).toBe(false); expect(cluster(db).updated_at).toBeGreaterThan(before.updated_at); // the text changed, but no new development (the mayor was already resigning): a read story is not reopened
     // user state and relationships untouched
     expect(feed[0]).toMatchObject({ id: 1, bookmarked: true, rating: 1, isRead: true });
     expect(db.prepare('SELECT cluster_id, article_id FROM cluster_articles').all()).toEqual([{ cluster_id: 1, article_id: 1 }]);

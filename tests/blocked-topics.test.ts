@@ -272,7 +272,8 @@ describe('seed, startup backfill, ingestion and migration', () => {
     raw.prepare("INSERT INTO articles (source_id,url,canonical_url,canonical_hash,publisher,title,title_norm,published_at,fetched_at,content_hash,availability) VALUES (1,'u','u','h','P','T','t',1,1,'c','headline_only')").run();
     const before = JSON.stringify([raw.prepare('SELECT * FROM sources').all(), raw.prepare('SELECT * FROM articles').all()]);
     expect(migrate(raw as DB)).toEqual(MIGRATIONS.filter((x) => x.id >= 5).map((x) => x.id)); // migration 5 and anything after it
-    expect(JSON.stringify([raw.prepare('SELECT * FROM sources').all(), raw.prepare('SELECT * FROM articles').all()])).toBe(before);
+    const noAccess = (rows: any[]) => rows.map(({ access, ...r }) => { expect(['unknown', null]).toContain(access); return r; }); // migration 9 adds access (defaults to 'unknown' / NULL)
+    expect(JSON.stringify([noAccess(raw.prepare('SELECT * FROM sources').all() as any[]), noAccess(raw.prepare('SELECT * FROM articles').all() as any[])])).toBe(before);
     expect(raw.prepare("SELECT name FROM sqlite_master WHERE name IN ('blocked_topics','article_blocks') ORDER BY name").all()).toEqual([{ name: 'article_blocks' }, { name: 'blocked_topics' }]);
     raw.prepare("INSERT INTO blocked_topics (name, created_at) VALUES ('x', 1)").run(); raw.prepare('INSERT INTO article_blocks VALUES (1,1)').run();
     raw.prepare('DELETE FROM articles').run(); expect((raw.prepare('SELECT COUNT(*) n FROM article_blocks').get() as any).n).toBe(0); // cascades with the article

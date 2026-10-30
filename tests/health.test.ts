@@ -190,7 +190,7 @@ describe('API, migration and compatibility', () => {
     const before = raw.prepare('SELECT * FROM sources').all();
     expect(migrate(raw as DB)).toEqual(MIGRATIONS.filter((x) => x.id >= 4).map((x) => x.id)); // migration 4 and anything after it
     const after = raw.prepare('SELECT * FROM sources').all() as any[];
-    expect(after[0].freshness_hours).toBeNull(); const { freshness_hours: _f, ...rest } = after[0]; expect([rest]).toEqual(before);
+    expect(after[0].freshness_hours).toBeNull(); const { freshness_hours: _f, access: _a, ...rest } = after[0]; expect([rest]).toEqual(before);
     expect(() => raw.prepare('UPDATE sources SET freshness_hours = 0').run()).toThrow(/CHECK/);
     expect(() => raw.prepare('UPDATE sources SET freshness_hours = 400').run()).toThrow(/CHECK/);
     raw.prepare('UPDATE sources SET freshness_hours = 336').run();

@@ -12,6 +12,7 @@ import type { Refresher } from '../news/ingest.js';
 import { feedUrlFor, ingestSource, processNewArticles, type SourceRow } from '../news/ingest.js';
 import { discoverFeeds, probeFeed } from '../news/discover.js';
 import { FetchError, validateUrl } from '../net/safeFetch.js';
+import { ACCESS_LEVELS } from '../news/access.js';
 import { explainStory, queryFeed, queryFrontPage } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics, LEGACY_WEIGHT, priorityForWeight } from '../news/topics.js';
@@ -36,7 +37,7 @@ function sourceDto(s: any) {
     aggregatorLabel: s.kind === 'aggregator' ? `Aggregated via Google News: domain-restricted search "${s.aggregator_query}" (keyword-based, not the publisher's own section feed); links open through Google News` : null,
     priority: prioOut(s.priority), enabled: !!s.enabled, coverage: s.coverage, categories: JSON.parse(s.categories), isLocal: !!s.is_local,
     health: ev.status, statusReason: ev.status === 'stale' ? ev.reason : null, freshnessHours: s.freshness_hours ?? null, freshnessDefaultHours: ev.defaultHours, lastCheckedAt: s.last_checked_at, lastSuccessAt: s.last_success_at, lastItemAt: s.last_item_at, lastError: s.last_error,
-    articleCount: s.article_count ?? 0,
+    articleCount: s.article_count ?? 0, access: s.access ?? 'unknown',
   };
 }
 
@@ -154,7 +155,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   });
   app.patch('/api/sources/:id', async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const b = z.object({ name: z.string().trim().min(1).max(80).optional(), enabled: z.boolean().optional(), priority: prio.optional(), coverage: z.enum(['comprehensive', 'interest']).optional(), categories: kw.optional(), isLocal: z.boolean().optional(), freshnessHours: z.number().int().min(1).max(MAX_FRESHNESS_HOURS).nullable().optional() }).parse(req.body);
+    const b = z.object({ name: z.string().trim().min(1).max(80).optional(), enabled: z.boolean().optional(), priority: prio.optional(), coverage: z.enum(['comprehensive', 'interest']).optional(), categories: kw.optional(), isLocal: z.boolean().optional(), access: z.enum(ACCESS_LEVELS).optional(), freshnessHours: z.number().int().min(1).max(MAX_FRESHNESS_HOURS).nullable().optional() }).parse(req.body);
     if (!db.prepare('SELECT 1 FROM sources WHERE id = ?').get(id)) return reply.code(404).send({ error: 'not_found' });
     const sets: string[] = []; const vals: any[] = [];
     const add = (c: string, v: unknown) => { sets.push(`${c} = ?`); vals.push(v); };
@@ -162,6 +163,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     if (b.priority !== undefined) add('priority', b.priority); if (b.coverage !== undefined) add('coverage', b.coverage);
     if (b.categories !== undefined) add('categories', JSON.stringify(b.categories)); if (b.isLocal !== undefined) add('is_local', b.isLocal ? 1 : 0);
     if (b.freshnessHours !== undefined) add('freshness_hours', b.freshnessHours);
+    if (b.access !== undefined) add('access', b.access);
     if (sets.length) db.prepare(`UPDATE sources SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
     refreshHealth(db, id); // thresholds / locality / enabled changed: re-evaluate from stored data (local, no network)
     // Coverage is evaluated at query time, so it takes effect immediately. Categories feed story categories: refresh the affected stories (local, no AI).
@@ -221,10 +223,10 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     weights: z.object({ interests: z.number().min(0).max(1), importance: z.number().min(0).max(1), recency: z.number().min(0).max(1), source: z.number().min(0).max(1), feedback: z.number().min(0).max(1) }),
     quotas: z.object({ personalized: z.number().min(0).max(1), major: z.number().min(0).max(1), local: z.number().min(0).max(1) }),
     preferredPublishers: z.array(z.string().max(80)).max(50), mutedPublishers: z.array(z.string().max(80)).max(50),
-    theme: z.enum(['light', 'dark', 'system']).optional(), showRead: z.boolean().optional(), showImages: z.boolean(), retentionDays: z.number().int().min(7).max(365), staleMinutes: z.number().int().min(15).max(1440),
+    theme: z.enum(['light', 'dark', 'system']).optional(), showRead: z.boolean().optional(), preferFreeCoverage: z.boolean().optional(), showImages: z.boolean(), retentionDays: z.number().int().min(7).max(365), staleMinutes: z.number().int().min(15).max(1440),
   });
   app.get('/api/prefs', async () => ({ prefs: getPrefs(db), publishers: (db.prepare('SELECT DISTINCT publisher FROM articles ORDER BY publisher').all() as any[]).map((r) => r.publisher) }));
-  app.put('/api/prefs', async (req) => { const p = prefsSchema.parse(req.body); const cur = getPrefs(db); savePrefs(db, { ...p, theme: p.theme ?? cur.theme, showRead: p.showRead ?? cur.showRead }); return { ok: true }; }); // fields an older client omits are kept
+  app.put('/api/prefs', async (req) => { const p = prefsSchema.parse(req.body); const cur = getPrefs(db); savePrefs(db, { ...p, theme: p.theme ?? cur.theme, showRead: p.showRead ?? cur.showRead, preferFreeCoverage: p.preferFreeCoverage ?? cur.preferFreeCoverage }); return { ok: true }; }); // fields an older client omits are kept
   // Light/dark choice is stored server-side so it follows you across devices and survives deploys. No write if unchanged.
   app.put('/api/theme', async (req) => { const { theme } = z.object({ theme: z.enum(['light', 'dark', 'system']) }).parse(req.body); const cur = getPrefs(db); if (cur.theme !== theme) savePrefs(db, { ...cur, theme }); return { theme }; });
   app.put('/api/ai/budget', async (req) => { const { budget } = z.object({ budget: z.number().int().min(0).max(100000) }).parse(req.body); setSetting(db, 'ai_daily_budget', budget); return { ok: true }; });

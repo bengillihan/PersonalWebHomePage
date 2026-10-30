@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import { api, fullDate, timeAgo } from '../api';
-import type { Story } from '../types';
+import type { AccessInfo, Story } from '../types';
 import BlockTopicForm from './BlockTopicForm';
 import ActionMenu, { type MenuItem } from './ActionMenu';
 
 const REASONS: [string, string][] = [['topic', 'Not interested in this topic'], ['already_knew', 'Already knew this'], ['low_importance', 'Low importance'], ['source', "Don't like this source"], ['duplicate', 'Duplicate']];
 const SHELL: Record<CardVariant, string> = { card: 'card p-4 sm:p-5', lead: 'border-b-2 border-slate-900 pb-5 dark:border-slate-100', brief: 'border-b border-slate-200 pb-3 dark:border-slate-800' };
 const HEADLINE: Record<CardVariant, string> = { card: 'text-lg font-semibold leading-snug sm:text-xl', lead: 'font-serif text-3xl font-bold leading-tight sm:text-4xl', brief: 'font-serif text-base font-semibold leading-snug sm:text-lg' };
+/** Concise access label beside a source; nothing at all when access is unknown. */
+const ACCESS_STYLE: Record<string, string> = { free: '!bg-emerald-100 !text-emerald-800 dark:!bg-emerald-900/40 dark:!text-emerald-200', metered: '!bg-amber-100 !text-amber-800 dark:!bg-amber-900/40 dark:!text-amber-200', paywalled: '!bg-rose-100 !text-rose-800 dark:!bg-rose-900/40 dark:!text-rose-200' };
+function AccessChip({ access }: { access?: AccessInfo }) {
+  if (!access?.label) return null;
+  return <span className={`chip whitespace-nowrap ${ACCESS_STYLE[access.level] ?? ''}`} title={access.basis === 'article' ? 'Stated by the article\u2019s own feed metadata' : 'An estimate from your setting for this publisher (Settings \u2192 Sources \u2192 Access)'}>{access.label}</span>;
+}
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
   <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={d} /></svg>
 );
@@ -62,7 +68,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
       <div className={variant === 'brief' ? 'flex flex-col gap-2 @sm:flex-row @sm:gap-4' : 'flex gap-4'}>
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-            <span className="font-semibold text-slate-800 dark:text-slate-100">{p?.publisher ?? 'Unknown'}</span>
+            <span className="font-semibold text-slate-800 dark:text-slate-100">{p?.publisher ?? 'Unknown'}</span>{p && <AccessChip access={p.access} />}
             {story.sourceCount > 1 && <span className="text-slate-500">+{story.sourceCount - 1} more</span>}
             <span className="text-slate-400">·</span>
             <time className="text-slate-600 dark:text-slate-300" dateTime={new Date(story.publishedAt).toISOString()} title={fullDate(story.publishedAt)}>{timeAgo(story.publishedAt)}</time>
@@ -136,7 +142,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
         <ul className="mt-3 space-y-1.5 border-t border-slate-100 pt-3 text-sm dark:border-slate-800">
           {story.articles.map((a) => (
             <li key={a.id} className="flex flex-wrap items-baseline gap-x-2">
-              <span className="font-medium">{a.publisher}</span>
+              <span className="font-medium">{a.publisher}</span><AccessChip access={a.access} />
               <a className="text-indigo-700 hover:underline dark:text-indigo-300" href={a.url} target="_blank" rel="noopener noreferrer">{a.title}</a>
               <span className="text-xs text-slate-400">{timeAgo(a.publishedAt)}</span>
               {a.muted && <span className="chip" title="You muted this publisher: it is hidden from your feeds, but listed here because it covers this story.">muted publisher</span>}

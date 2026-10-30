@@ -148,7 +148,10 @@ describe('read applies to the whole story; only a material development makes it 
     await refresh(); expect(ids('latest')).toEqual([]);
 
     fx.routes.set('/rf-a', { body: items({ ...A, desc: 'Correction: the machinists approved the contract by a narrow 51 percent margin on Thursday, not Wednesday as first reported.' }) });
-    await refresh(); expect(queryFeed(db, { tab: 'latest' }).items[0]).toMatchObject({ id: cluster, isRead: true, isUpdated: true }); // substantive change resurfaces it, labelled Updated
+    await refresh(); expect(ids('latest')).toEqual([]); // a clarification (new figures, same story) is only ambiguous: it stays read without a model (a pending check is kept)
+    expect((db.prepare("SELECT COUNT(*) n FROM novelty_checks WHERE status = 'pending'").get() as any).n).toBe(1);
+    fx.routes.set('/rf-a', { body: items({ ...A, title: A.title + '; Boeing announces layoffs', desc: 'Correction: the machinists approved the contract by a narrow 51 percent margin on Thursday, not Wednesday as first reported.' }) });
+    await refresh(); expect(queryFeed(db, { tab: 'latest' }).items[0]).toMatchObject({ id: cluster, isRead: true, isUpdated: true }); // a new milestone resurfaces it, labelled Updated
     markRead(cluster); await sleep(5); expect(ids('latest')).toEqual([]); // and reading it again hides it again, once
   });
 });

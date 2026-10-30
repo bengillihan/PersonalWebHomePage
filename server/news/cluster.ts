@@ -3,6 +3,7 @@ import { BASE_CATEGORIES, type Ai } from '../ai/gemini.js';
 import { entities, jaccard, sha256, tokens } from './normalize.js';
 import { contradicts } from './contradiction.js';
 import { assessNovelty, BASELINE_MAX } from './novelty.js';
+import { enqueueCheck, expireChecksFor, runNoveltyChecks, type BaselineItem } from './novelty-checks.js';
 
 export const MERGE_THRESHOLD = 0.55;
 export const UNCERTAIN_THRESHOLD = 0.36;
@@ -117,6 +118,7 @@ export function createSingleton(db: DB, articleId: number): number {
 }
 
 function moveArticle(db: DB, articleId: number, to: number, manual = 0) {
+  expireChecksFor(db, articleId); // a question about the article in its old story no longer applies
   const from = (db.prepare('SELECT cluster_id FROM articles WHERE id = ?').get(articleId) as any)?.cluster_id as number | null;
   db.prepare('UPDATE articles SET cluster_id = ? WHERE id = ?').run(to, articleId);
   db.prepare('INSERT OR REPLACE INTO cluster_articles (cluster_id, article_id, manual, added_at) VALUES (?,?,?,?)').run(to, articleId, manual, Date.now());
@@ -157,13 +159,16 @@ export const isUsableSummary = (s: string | null | undefined): s is string => ty
 /** Identifies the exact member content a consolidated summary was written from. Order-independent. */
 export function clusterContentHash(contentHashes: string[]): string { return sha256([...contentHashes].sort().join(',')); }
 
+/** The story's own ordering of its articles (best first): AI/excerpt text and source priority, then earliest. The stored primary is the first of these. */
+export const articleRank = (m: { summary_kind: string | null; priority: number }) => (m.summary_kind === 'ai' ? 2 : m.summary_kind === 'excerpt' ? 1 : 0) * 10 + m.priority * 3;
+export const byRank = (a: { summary_kind: string | null; priority: number; published_at: number }, b: { summary_kind: string | null; priority: number; published_at: number }) => articleRank(b) - articleRank(a) || a.published_at - b.published_at;
+
 /** Recomputes derived cluster fields from members. Deletes the cluster if empty. Writes only when something changed. */
 export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false, substantive = false): void {
   const members = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.importance, a.ai_category, a.summary, a.summary_kind, a.content_hash, s.priority, s.categories AS src_categories, s.coverage AS src_coverage
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.cluster_id = ?`).all(clusterId) as any[];
   if (!members.length) { db.prepare('DELETE FROM story_clusters WHERE id = ?').run(clusterId); return; }
-  const rank = (m: any) => (m.summary_kind === 'ai' ? 2 : m.summary_kind === 'excerpt' ? 1 : 0) * 10 + m.priority * 3;
-  const ordered = [...members].sort((a, b) => rank(b) - rank(a) || a.published_at - b.published_at);
+  const ordered = [...members].sort(byRank);
   const primary = ordered[0];
   const pubs = new Set(members.map((m) => String(m.publisher).trim().toLowerCase())); // distinct publishers, never feed entries
   const cur = db.prepare('SELECT * FROM story_clusters WHERE id = ?').get(clusterId) as any;
@@ -204,26 +209,25 @@ function refreshClusterSummary(db: DB, cur: any, ordered: any[]): void {
   db.prepare('UPDATE story_clusters SET summary=?, summary_kind=?, differences=NULL, summary_hash=? WHERE id=?').run(summary, kind, marker, cur.id);
 }
 
-/** At most this many ambiguous "is it a new development?" questions go to Gemini per clustering run (on top of the daily budget and the cache). */
-export const MAX_AI_NOVELTY = 10;
-interface NoveltyJob { articleId: number; clusterId: number; articleHash: string; baselineHash: string; article: { publisher: string; title: string; excerpt: string | null }; baseline: { publisher: string; title: string; excerpt: string | null }[] }
-
 /**
- * An article has just joined `clusterId`. If the user has already read that story, decide whether it reports a genuinely new development after they read it
- * (see novelty.ts). Returns true when it clearly does (the caller records substantive_at). Ambiguous cases are queued for the model; everything else, and every
- * doubt, leaves the story read. Never touches the read timestamp. Unread stories and stories already reopened since the last read are not examined at all.
+ * An article has just joined `clusterId` (or was materially corrected). If the user has already read that story, decide whether it reports a genuinely new
+ * development after they read it (novelty.ts). Returns true when it clearly does (the caller records substantive_at). An ambiguous case becomes a durable
+ * pending check (novelty-checks.ts) that later refreshes settle with the model; everything else, and every doubt, leaves the story read. Never touches the
+ * read timestamp. Unread stories, and stories already reopened since the last read, are not examined at all.
+ *  - `eventAt`: when the development happened (the article's publication time for a join; now for a correction).
+ *  - `earlier`: older versions of this same article to compare against (a correction compares the article with what it said before).
  */
-function judgeJoin(db: DB, clusterId: number, articleId: number, queue: NoveltyJob[], ai: Ai | null): boolean {
+export function judgeJoin(db: DB, clusterId: number, articleId: number, o: { eventAt?: number; earlier?: BaselineItem[] } = {}): boolean {
   const st = db.prepare('SELECT rs.read_at, c.substantive_at FROM reading_state rs JOIN story_clusters c ON c.id = rs.cluster_id WHERE rs.cluster_id = ?').get(clusterId) as { read_at: number | null; substantive_at: number | null } | undefined;
   if (!st?.read_at || (st.substantive_at ?? 0) > st.read_at) return false;
   const art = db.prepare('SELECT publisher, title, excerpt, content_hash, published_at FROM articles WHERE id = ?').get(articleId) as { publisher: string; title: string; excerpt: string | null; content_hash: string; published_at: number } | undefined;
-  if (!art || art.published_at <= st.read_at) return false; // reported before the user read the story: not news since
-  const base = db.prepare(`SELECT publisher, title, excerpt, content_hash FROM articles WHERE cluster_id = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT ${BASELINE_MAX}`).all(clusterId, articleId) as { publisher: string; title: string; excerpt: string | null; content_hash: string }[];
-  const n = assessNovelty(art, base);
+  const eventAt = o.eventAt ?? art?.published_at ?? 0;
+  if (!art || eventAt <= st.read_at) return false; // happened before the user read the story: not news since
+  const others = db.prepare(`SELECT id, publisher, title, excerpt, content_hash AS hash FROM articles WHERE cluster_id = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT ${BASELINE_MAX}`).all(clusterId, articleId) as BaselineItem[];
+  const baseline = [...(o.earlier ?? []), ...others].slice(0, BASELINE_MAX);
+  const n = assessNovelty(art, baseline);
   if (n.kind === 'substantive') return true;
-  if (n.kind === 'ambiguous' && queue.length < MAX_AI_NOVELTY && ai && typeof ai.assessDevelopments === 'function' && ai.canCall()) {
-    queue.push({ articleId, clusterId, articleHash: art.content_hash, baselineHash: clusterContentHash(base.map((b) => b.content_hash)), article: art, baseline: base });
-  }
+  if (n.kind === 'ambiguous') enqueueCheck(db, { clusterId, articleId, articleHash: art.content_hash, baseline, eventAt }); // durable; one per article text
   return false;
 }
 
@@ -244,7 +248,6 @@ function storyContradicts(db: DB, clusterId: number, title: string): boolean {
  */
 export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[], maxAiPairs = 20): Promise<Set<number>> {
   const touched = new Set<number>();
-  const novelty: NoveltyJob[] = [];
   const uncertain: { id: number; articleId: number; otherArticleId: number; hashA: string; hashB: string; a: any; b: any }[] = [];
   const getArt = db.prepare('SELECT id, title, excerpt, publisher, published_at, content_hash FROM articles WHERE id = ?');
   const storyMembers = db.prepare('SELECT title, excerpt FROM articles WHERE cluster_id = ?');
@@ -275,7 +278,7 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
       }
       if (target !== null) {
         moveArticle(db, id, target); touched.add(target);
-        recomputeCluster(db, target, true, judgeJoin(db, target, id, novelty, ai));
+        recomputeCluster(db, target, true, judgeJoin(db, target, id));
       } else {
         const cid = createSingleton(db, id); touched.add(cid);
         if (fallback && ai?.canCall() && uncertain.length < maxAiPairs) {
@@ -309,24 +312,11 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
         const old = moveArticle(db, u.articleId, target);
         touched.add(target);
         if (old) { recomputeCluster(db, old); touched.delete(old); }
-        recomputeCluster(db, target, true, judgeJoin(db, target, u.articleId, novelty, ai));
+        recomputeCluster(db, target, true, judgeJoin(db, target, u.articleId));
       }
     })();
   }
-  if (novelty.length && ai) { // ambiguous cases only; the verdict never lowers the read time, it only records that a development happened
-    const jobs = novelty.map((j, i) => ({ id: i + 1, ...j }));
-    const verdicts = await ai.assessDevelopments(jobs);
-    db.transaction(() => {
-      for (const j of jobs) {
-        if (verdicts.get(j.id) !== true) continue; // unknown or no: stays read
-        const a = db.prepare('SELECT cluster_id, content_hash, published_at FROM articles WHERE id = ?').get(j.articleId) as { cluster_id: number | null; content_hash: string; published_at: number } | undefined;
-        if (!a || a.cluster_id !== j.clusterId || a.content_hash !== j.articleHash) continue; // moved, ungrouped or corrected while the model was thinking
-        const st = db.prepare('SELECT rs.read_at, c.substantive_at FROM reading_state rs JOIN story_clusters c ON c.id = rs.cluster_id WHERE rs.cluster_id = ?').get(j.clusterId) as { read_at: number | null; substantive_at: number | null } | undefined;
-        if (!st?.read_at || a.published_at <= st.read_at || (st.substantive_at ?? 0) > st.read_at) continue; // unread meanwhile, read again after it, or already reopened
-        db.prepare('UPDATE story_clusters SET substantive_at = ? WHERE id = ?').run(Date.now(), j.clusterId);
-      }
-    })();
-  }
+  await runNoveltyChecks(db, ai); // pending questions from this and earlier refreshes (bounded, budget-aware, retried later if unanswered)
   return touched;
 }
 
@@ -336,6 +326,7 @@ export function ungroupArticle(db: DB, articleId: number): number {
   if (!row) throw new Error('Article not found');
   const old = row.cluster_id as number;
   if ((db.prepare('SELECT COUNT(*) n FROM articles WHERE cluster_id = ?').get(old) as any).n < 2) return old;
+  expireChecksFor(db, articleId);
   db.prepare('UPDATE articles SET cluster_id = NULL, cluster_locked = 1 WHERE id = ?').run(articleId);
   db.prepare('DELETE FROM cluster_articles WHERE article_id = ?').run(articleId);
   const fresh = createSingleton(db, articleId);

@@ -279,4 +279,41 @@ ALTER TABLE topics ADD COLUMN stance TEXT NOT NULL DEFAULT 'prefer' CHECK (stanc
 ALTER TABLE story_clusters ADD COLUMN substantive_at INTEGER;
 `,
   },
+  {
+    id: 9,
+    name: 'free_coverage_access',
+    // "Prefer free coverage": a per-source access setting (default 'unknown' = no opinion, so nothing changes for existing sources) and optional EXPLICIT
+    // per-article access from feed metadata (NULL = not stated; it is never inferred). Both additive.
+    sql: `
+ALTER TABLE sources ADD COLUMN access TEXT NOT NULL DEFAULT 'unknown' CHECK (access IN ('free','metered','paywalled','unknown'));
+ALTER TABLE articles ADD COLUMN access TEXT CHECK (access IS NULL OR access IN ('free','metered','paywalled'));
+`,
+  },
+  {
+    id: 10,
+    name: 'novelty_checks',
+    // Durable "is this a new development?" questions that the local checks could not settle. The comparison baseline is FROZEN at creation (so a retry never
+    // compares an article with itself), and a check is tied to the article's content hash, so a corrected article is a different question. Rows leave with
+    // their article or story (cascade); other changes mark them 'expired'. Additive.
+    sql: `
+CREATE TABLE novelty_checks (
+  id INTEGER PRIMARY KEY,
+  article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  cluster_id INTEGER NOT NULL REFERENCES story_clusters(id) ON DELETE CASCADE,
+  article_hash TEXT NOT NULL,
+  baseline TEXT NOT NULL,
+  baseline_hash TEXT NOT NULL,
+  event_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','failed','expired')),
+  verdict INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (article_id, article_hash)
+);
+CREATE INDEX idx_novelty_checks_pending ON novelty_checks(status, next_attempt_at);
+`,
+  },
 ];

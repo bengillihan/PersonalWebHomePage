@@ -11,6 +11,7 @@ export interface Prefs {
   staleMinutes: number;
   theme: 'light' | 'dark' | 'system';
   showRead: boolean; // show already-read stories in the main feeds (dimmed); off by default
+  preferFreeCoverage: boolean; // choose a story's primary article from free sources first (see news/access.ts); on by default
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -23,6 +24,7 @@ export const DEFAULT_PREFS: Prefs = {
   staleMinutes: 60,
   theme: 'system',
   showRead: false,
+  preferFreeCoverage: true,
 };
 
 export function getPrefs(db: DB): Prefs {

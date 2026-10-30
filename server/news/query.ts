@@ -2,7 +2,8 @@ import type { DB } from '../db.js';
 import { getPrefs } from '../settings.js';
 import { balanceFeed, buildFeedbackModel, INTEREST_MATCH, scoreCandidate, type Candidate, type Scored } from './rank.js';
 import { loadTopics, weightFactor } from './topics.js';
-import { isUsableSummary } from './cluster.js';
+import { byRank, isUsableSummary } from './cluster.js';
+import { accessInfo, accessTier, type AccessInfo } from './access.js';
 import { classify, isSection, SECTION_LABEL, LOCAL_PRIORITY_BOOST, type Section } from './sections.js';
 import { FRONT_KEYS, getFrontMix, getGeo, type FrontKey } from '../settings.js';
 
@@ -11,8 +12,8 @@ export interface StoryDto {
   id: number; title: string; summary: string | null; summaryKind: string | null; differences: string | null;
   category: string | null; importance: number; publishedAt: number; updatedAt: number; sourceCount: number;
   isRead: boolean; isUpdated: boolean; bookmarked: boolean; rating: number; imageUrl: string | null;
-  primary: { publisher: string; url: string; aggregated: boolean } | null;
-  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[]; muted: boolean }[];
+  primary: { publisher: string; url: string; aggregated: boolean; access: AccessInfo } | null;
+  articles: { id: number; publisher: string; title: string; url: string; publishedAt: number; aggregated: boolean; alsoVia: string[]; muted: boolean; access: AccessInfo }[];
   mutedSources: number; // distinct MUTED publishers also covering this story (listed, labelled, not counted in sourceCount)
   blockedBy: string[]; // enabled "Not interested" topics that match EVERY article of this story (it is hidden from feeds, shown in Saved/search)
   why?: { score: number; parts: Record<string, number>; reasons: string[]; bucket: string };
@@ -249,13 +250,14 @@ function scoreRows(db: DB, rows: any[]): Scored[] {
 }
 
 function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: string[] = []): StoryDto[] {
+  const preferFree = getPrefs(db).preferFreeCoverage;
   const mutedSet = new Set(mutedNames.map(normName));
   const isMuted = (a: { publisher: string }) => mutedSet.has(normName(a.publisher));
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const marks = ids.map(() => '?').join(',');
-  const arts = db.prepare(`SELECT a.id, a.cluster_id, a.publisher, a.title, a.url, a.published_at, a.image_url, a.summary, a.summary_kind, s.kind FROM articles a JOIN sources s ON s.id = a.source_id
-    WHERE a.cluster_id IN (${marks}) ORDER BY a.published_at ASC`).all(...ids) as any[];
+  const arts = db.prepare(`SELECT a.id, a.cluster_id, a.publisher, a.title, a.url, a.published_at, a.image_url, a.summary, a.summary_kind, a.access AS article_access, s.access AS source_access, s.priority, s.kind FROM articles a JOIN sources s ON s.id = a.source_id
+    WHERE a.cluster_id IN (${marks}) ORDER BY a.published_at ASC, a.id ASC`).all(...ids) as any[];
   // Other feeds that carried the very same article (the originating publisher is unchanged; this is only 'also via').
   const via = new Map<number, string[]>();
   for (const v of db.prepare(`SELECT x.article_id, s.name FROM article_sources x JOIN articles a ON a.id = x.article_id JOIN sources s ON s.id = x.source_id
@@ -271,21 +273,32 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
     const unmuted = list.filter((a) => !isMuted(a));
     const mutedHere = list.length - unmuted.length > 0 && unmuted.length > 0;
     // When a muted publisher is part of the story, the headline, link and excerpt all come from ONE unmuted article, preferring one that has usable text.
-    const prim = !mutedHere ? prim0 : [prim0, ...unmuted].find((a) => !isMuted(a) && isUsableSummary(a.summary)) ?? (isMuted(prim0) ? unmuted[0] : prim0);
-    // The stored cluster summary may be an excerpt from the muted publisher or a consolidated AI summary written from its text, so it is not shown:
-    // the visible article's own excerpt is, or the headline-only fallback when that publisher gave none. Nothing is regenerated (no Gemini call).
-    const own = mutedHere && prim && isUsableSummary(prim.summary) ? prim : null;
+    const pickMuted = (subset: any[]) => [prim0, ...subset].find((a) => subset.includes(a) && !isMuted(a) && isUsableSummary(a.summary)) ?? (isMuted(prim0) || !subset.includes(prim0) ? subset[0] : prim0);
+    let prim = !mutedHere ? prim0 : pickMuted(unmuted);
+    // "Prefer free coverage": among the articles that may be shown (unmuted ones, or all if every publisher is muted) take the best access tier, and inside
+    // that tier keep the story's existing choice (its stored primary, else its usual ranking). Off, or nothing to choose between: exactly the behaviour above.
+    if (preferFree && list.length > 1) {
+      const pool = unmuted.length ? unmuted : list;
+      const tierOf = (a: any) => accessTier(a.article_access, a.source_access);
+      const best = Math.min(...pool.map(tierOf)); const subset = pool.filter((a) => tierOf(a) === best);
+      prim = mutedHere ? pickMuted(subset) : subset.includes(prim0) ? prim0 : [...subset].sort(byRank)[0];
+    }
+    // The stored cluster summary may be an excerpt from another publisher's article (a muted one, or one not chosen as primary) or a consolidated AI summary
+    // written from muted text, so the visible article's own excerpt is shown instead (or headline-only when it gave none). A combined AI summary that is NOT
+    // muted-tainted is kept and stays labelled "AI summary". Nothing is regenerated (no Gemini call).
+    const useOwn = mutedHere || (prim !== prim0 && r.summary_kind !== 'ai');
+    const own = useOwn && prim && isUsableSummary(prim.summary) ? prim : null;
     const publishers = (xs: { publisher: string }[]) => new Set(xs.map((a) => normName(a.publisher))).size;
     const w = why?.get(r.id);
     return {
       id: r.id, title: prim === prim0 ? r.title : prim.title,
-      summary: mutedHere ? own?.summary ?? null : r.summary, summaryKind: mutedHere ? (own ? own.summary_kind : 'headline') : r.summary_kind, differences: mutedHere ? null : r.differences, category: r.category,
+      summary: useOwn ? own?.summary ?? null : r.summary, summaryKind: useOwn ? (own ? own.summary_kind : 'headline') : r.summary_kind, differences: mutedHere ? null : r.differences, category: r.category,
       importance: r.importance, publishedAt: r.last_published_at, updatedAt: r.updated_at,
       sourceCount: unmuted.length ? publishers(unmuted) : r.source_count, mutedSources: unmuted.length ? publishers(list.filter(isMuted)) : 0, // nothing unmuted to prefer: show the real coverage
       isRead: !!r.read_at, isUpdated: !!r.read_at && (r.substantive_at ?? 0) > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
       imageUrl: prim?.image_url ?? null,
-      primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator' } : null,
-      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [], muted: isMuted(a) })),
+      primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator', access: accessInfo(prim.article_access, prim.source_access) } : null,
+      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [], muted: isMuted(a), access: accessInfo(a.article_access, a.source_access) })),
       blockedBy: list.length && list.every((a) => blockedArticles.has(a.id)) ? [...new Set(list.flatMap((a) => blockedArticles.get(a.id)!))] : [],
       ...(w ? { why: { score: w.score, parts: w.parts as any, reasons: w.reasons, bucket: w.bucket } } : {}),
     };
