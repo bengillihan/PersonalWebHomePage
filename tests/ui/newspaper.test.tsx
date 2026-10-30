@@ -39,7 +39,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const feedTabs = () => requests.filter((u) => u.startsWith('/api/feed')).map((u) => new URL('http://x' + u).searchParams.get('tab'));
 
 describe('navigation', () => {
-  const NAMES = ['Front Page', 'Local', 'Regional', 'Washington', 'U.S.', 'World', 'Business', 'Technology', 'Sports', 'Weather'];
+  const NAMES = ['Front Page', 'Local', 'Regional', 'Washington', 'U.S.', 'World', 'Politics', 'Business', 'Technology', 'Sports', 'Weather'];
   it('shows every section in order on the horizontal bar and marks the current one', () => {
     render(<Nav tab="local" onPick={() => {}} />);
     const tabs = within(screen.getByRole('tablist', { name: 'Sections' })).getAllByRole('tab');

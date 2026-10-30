@@ -15,7 +15,7 @@ import { FetchError, validateUrl } from '../net/safeFetch.js';
 import { explainStory, queryFeed, queryFrontPage } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics, LEGACY_WEIGHT, priorityForWeight } from '../news/topics.js';
-import { DEFAULT_GEO, getGeo, getPrefs, saveGeo, savePrefs } from '../settings.js';
+import { DEFAULT_FRONT_MIX, DEFAULT_GEO, FRONT_KEYS, getFrontMix, getGeo, getPrefs, saveFrontMix, saveGeo, savePrefs, type FrontKey } from '../settings.js';
 import { getDbIdentity, type PersistenceReport } from '../storage.js';
 import { evaluateSource, MAX_FRESHNESS_HOURS, refreshHealth } from '../news/health.js';
 import { RANGES, MarketService, type Range } from '../market/service.js';
@@ -68,6 +68,12 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     const page = queryFrontPage(db);
     const total = (db.prepare('SELECT COUNT(*) n FROM story_clusters').get() as any).n;
     return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: getPrefs(db).showRead };
+  });
+  app.get('/api/front-mix', async () => ({ mix: getFrontMix(db), defaults: DEFAULT_FRONT_MIX }));
+  app.put('/api/front-mix', async (req) => {
+    const w = z.number().int().min(0).max(5);
+    const body = z.object({ weights: z.object(Object.fromEntries(FRONT_KEYS.map((k) => [k, w])) as Record<FrontKey, typeof w>), majorException: z.boolean(), majorThreshold: z.number().min(0.5).max(1) }).parse(req.body);
+    saveFrontMix(db, body); return { mix: getFrontMix(db), defaults: DEFAULT_FRONT_MIX };
   });
   app.get('/api/geo', async () => ({ geo: getGeo(db), defaults: DEFAULT_GEO }));
   app.put('/api/geo', async (req) => { const list = z.array(z.string().trim().min(1).max(60)).max(100); saveGeo(db, z.object({ local: list, localPriority: list, regional: list, washington: list }).parse(req.body)); return { geo: getGeo(db), defaults: DEFAULT_GEO }; });

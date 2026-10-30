@@ -146,7 +146,7 @@ describe('multi-source stories use every feed association', () => {
     db.prepare("UPDATE story_clusters SET summary = 'Kept AI summary', summary_kind = 'ai' WHERE id = ?").run(s.cluster);
     db.prepare('INSERT INTO bookmarks VALUES (?,5)').run(s.cluster);
     db.prepare("INSERT INTO feedback (cluster_id, rating, reason, category, created_at, updated_at) VALUES (?,1,NULL,NULL,1,1)").run(s.cluster);
-    db.prepare('INSERT INTO reading_state (cluster_id, read_at) VALUES (?,9)').run(s.cluster);
+    db.prepare('INSERT INTO reading_state (cluster_id, read_at) VALUES (?,9)').run(s.cluster); db.prepare('UPDATE story_clusters SET substantive_at = 10 WHERE id = ?').run(s.cluster); // read, then materially updated
     const t = interest('Stocks', { description: 'stock market earnings' }); expect(ids('latest')).toEqual([s.cluster]);
     db.prepare('DELETE FROM topics WHERE id = ?').run(t); reindexTopics(db); expect(ids('latest')).toEqual([]);
     const [saved] = queryFeed(db, { tab: 'saved' }).items;

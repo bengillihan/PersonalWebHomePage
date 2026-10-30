@@ -56,9 +56,9 @@ describe('automatic Gemini grouping never destroys user state', () => {
     expect(count(`SELECT COUNT(*) n FROM reading_state WHERE cluster_id = ${ctx.cb}`)).toBe(0);
   });
 
-  it('...and a story only the obsolete side had read or hidden does not bury the merged story', async () => {
+  it('REGRESSION: a duplicate that was read counts as reading the shared event (hidden still needs every copy)', async () => {
     const ctx = await run(({ cb }) => { put.hidden(cb, 800); put.read(cb, 900); }); // the target story was untouched
-    expect(db.prepare('SELECT cluster_id, read_at, hidden_at FROM reading_state').all()).toEqual([{ cluster_id: ctx.ca, read_at: null, hidden_at: null }]);
+    expect(db.prepare('SELECT cluster_id, read_at, hidden_at FROM reading_state').all()).toEqual([{ cluster_id: ctx.ca, read_at: 900, hidden_at: null }]); // before: read_at null, so the read story came back unread
   });
 
   it('REGRESSION: user changes made to the TARGET story during the wait are preserved and merged, with the latest opinion winning', async () => {
@@ -71,7 +71,7 @@ describe('automatic Gemini grouping never destroys user state', () => {
   it('a user action on the target alone survives untouched', async () => {
     const ctx = await run(({ ca }) => { put.bookmark(ca, 123); put.read(ca, 456); });
     expect(db.prepare('SELECT cluster_id, created_at FROM bookmarks').all()).toEqual([{ cluster_id: ctx.ca, created_at: 123 }]);
-    expect(db.prepare('SELECT read_at FROM reading_state').all()).toEqual([{ read_at: null }]); // obsolete story was unread, so the merged story is unread
+    expect(db.prepare('SELECT read_at FROM reading_state').all()).toEqual([{ read_at: 456 }]); // the unread duplicate must not undo it
   });
 
   it('a story that keeps other articles after one moves out is NOT deleted and keeps its own state', async () => {

@@ -2,6 +2,7 @@ import type { DB } from '../db.js';
 import { BASE_CATEGORIES, type Ai } from '../ai/gemini.js';
 import { entities, jaccard, sha256, tokens } from './normalize.js';
 import { contradicts } from './contradiction.js';
+import { assessNovelty, BASELINE_MAX } from './novelty.js';
 
 export const MERGE_THRESHOLD = 0.55;
 export const UNCERTAIN_THRESHOLD = 0.36;
@@ -157,7 +158,7 @@ export const isUsableSummary = (s: string | null | undefined): s is string => ty
 export function clusterContentHash(contentHashes: string[]): string { return sha256([...contentHashes].sort().join(',')); }
 
 /** Recomputes derived cluster fields from members. Deletes the cluster if empty. Writes only when something changed. */
-export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false): void {
+export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false, substantive = false): void {
   const members = db.prepare(`SELECT a.id, a.title, a.publisher, a.published_at, a.importance, a.ai_category, a.summary, a.summary_kind, a.content_hash, s.priority, s.categories AS src_categories, s.coverage AS src_coverage
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.cluster_id = ?`).all(clusterId) as any[];
   if (!members.length) { db.prepare('DELETE FROM story_clusters WHERE id = ?').run(clusterId); return; }
@@ -178,7 +179,8 @@ export function recomputeCluster(db: DB, clusterId: number, bumpUpdated = false)
       first_published_at=?, last_published_at=? WHERE id=?`).run(next.primary_article_id, next.title, next.category, next.importance, next.article_count, next.source_count, next.first_published_at, next.last_published_at, clusterId);
   }
   refreshClusterSummary(db, cur, ordered);
-  if (bumpUpdated) db.prepare('UPDATE story_clusters SET updated_at = ? WHERE id = ?').run(Date.now(), clusterId);
+  if (bumpUpdated) db.prepare('UPDATE story_clusters SET updated_at = ? WHERE id = ?').run(Date.now(), clusterId); // new coverage: shown as recently active, never reopens a read story
+  if (substantive) db.prepare('UPDATE story_clusters SET substantive_at = ? WHERE id = ?').run(Date.now(), clusterId); // a material development: reopens it (once) for anyone who read it earlier
 }
 
 /**
@@ -202,6 +204,29 @@ function refreshClusterSummary(db: DB, cur: any, ordered: any[]): void {
   db.prepare('UPDATE story_clusters SET summary=?, summary_kind=?, differences=NULL, summary_hash=? WHERE id=?').run(summary, kind, marker, cur.id);
 }
 
+/** At most this many ambiguous "is it a new development?" questions go to Gemini per clustering run (on top of the daily budget and the cache). */
+export const MAX_AI_NOVELTY = 10;
+interface NoveltyJob { articleId: number; clusterId: number; articleHash: string; baselineHash: string; article: { publisher: string; title: string; excerpt: string | null }; baseline: { publisher: string; title: string; excerpt: string | null }[] }
+
+/**
+ * An article has just joined `clusterId`. If the user has already read that story, decide whether it reports a genuinely new development after they read it
+ * (see novelty.ts). Returns true when it clearly does (the caller records substantive_at). Ambiguous cases are queued for the model; everything else, and every
+ * doubt, leaves the story read. Never touches the read timestamp. Unread stories and stories already reopened since the last read are not examined at all.
+ */
+function judgeJoin(db: DB, clusterId: number, articleId: number, queue: NoveltyJob[], ai: Ai | null): boolean {
+  const st = db.prepare('SELECT rs.read_at, c.substantive_at FROM reading_state rs JOIN story_clusters c ON c.id = rs.cluster_id WHERE rs.cluster_id = ?').get(clusterId) as { read_at: number | null; substantive_at: number | null } | undefined;
+  if (!st?.read_at || (st.substantive_at ?? 0) > st.read_at) return false;
+  const art = db.prepare('SELECT publisher, title, excerpt, content_hash, published_at FROM articles WHERE id = ?').get(articleId) as { publisher: string; title: string; excerpt: string | null; content_hash: string; published_at: number } | undefined;
+  if (!art || art.published_at <= st.read_at) return false; // reported before the user read the story: not news since
+  const base = db.prepare(`SELECT publisher, title, excerpt, content_hash FROM articles WHERE cluster_id = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT ${BASELINE_MAX}`).all(clusterId, articleId) as { publisher: string; title: string; excerpt: string | null; content_hash: string }[];
+  const n = assessNovelty(art, base);
+  if (n.kind === 'substantive') return true;
+  if (n.kind === 'ambiguous' && queue.length < MAX_AI_NOVELTY && ai && typeof ai.assessDevelopments === 'function' && ai.canCall()) {
+    queue.push({ articleId, clusterId, articleHash: art.content_hash, baselineHash: clusterContentHash(base.map((b) => b.content_hash)), article: art, baseline: base });
+  }
+  return false;
+}
+
 /** True if any article already in the story makes a claim opposite to this headline. */
 function storyContradicts(db: DB, clusterId: number, title: string): boolean {
   return (db.prepare('SELECT title FROM articles WHERE cluster_id = ?').all(clusterId) as { title: string }[]).some((m) => contradicts(title, m.title));
@@ -219,6 +244,7 @@ function storyContradicts(db: DB, clusterId: number, title: string): boolean {
  */
 export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[], maxAiPairs = 20): Promise<Set<number>> {
   const touched = new Set<number>();
+  const novelty: NoveltyJob[] = [];
   const uncertain: { id: number; articleId: number; otherArticleId: number; hashA: string; hashB: string; a: any; b: any }[] = [];
   const getArt = db.prepare('SELECT id, title, excerpt, publisher, published_at, content_hash FROM articles WHERE id = ?');
   const storyMembers = db.prepare('SELECT title, excerpt FROM articles WHERE cluster_id = ?');
@@ -249,7 +275,7 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
       }
       if (target !== null) {
         moveArticle(db, id, target); touched.add(target);
-        recomputeCluster(db, target, true);
+        recomputeCluster(db, target, true, judgeJoin(db, target, id, novelty, ai));
       } else {
         const cid = createSingleton(db, id); touched.add(cid);
         if (fallback && ai?.canCall() && uncertain.length < maxAiPairs) {
@@ -283,7 +309,21 @@ export async function clusterArticles(db: DB, ai: Ai | null, articleIds: number[
         const old = moveArticle(db, u.articleId, target);
         touched.add(target);
         if (old) { recomputeCluster(db, old); touched.delete(old); }
-        recomputeCluster(db, target, true);
+        recomputeCluster(db, target, true, judgeJoin(db, target, u.articleId, novelty, ai));
+      }
+    })();
+  }
+  if (novelty.length && ai) { // ambiguous cases only; the verdict never lowers the read time, it only records that a development happened
+    const jobs = novelty.map((j, i) => ({ id: i + 1, ...j }));
+    const verdicts = await ai.assessDevelopments(jobs);
+    db.transaction(() => {
+      for (const j of jobs) {
+        if (verdicts.get(j.id) !== true) continue; // unknown or no: stays read
+        const a = db.prepare('SELECT cluster_id, content_hash, published_at FROM articles WHERE id = ?').get(j.articleId) as { cluster_id: number | null; content_hash: string; published_at: number } | undefined;
+        if (!a || a.cluster_id !== j.clusterId || a.content_hash !== j.articleHash) continue; // moved, ungrouped or corrected while the model was thinking
+        const st = db.prepare('SELECT rs.read_at, c.substantive_at FROM reading_state rs JOIN story_clusters c ON c.id = rs.cluster_id WHERE rs.cluster_id = ?').get(j.clusterId) as { read_at: number | null; substantive_at: number | null } | undefined;
+        if (!st?.read_at || a.published_at <= st.read_at || (st.substantive_at ?? 0) > st.read_at) continue; // unread meanwhile, read again after it, or already reopened
+        db.prepare('UPDATE story_clusters SET substantive_at = ? WHERE id = ?').run(Date.now(), j.clusterId);
       }
     })();
   }
@@ -310,8 +350,9 @@ export function ungroupArticle(db: DB, articleId: number): number {
  *
  * Conflict rules:
  *  - bookmark: saved if ANY cluster was saved; keeps the earliest created_at.
- *  - read: read only if EVERY cluster was read (unread wins, so nothing new is buried); read_at = latest of them.
- *    The merge also bumps updated_at, so a fully read story shows "Updated".
+ *  - read: the shared event counts as read if ANY copy was read (a duplicate you never opened must not undo your reading); read_at = the latest
+ *    read. Nothing is bumped by the merge itself. What can reopen it is a material development already recorded on any copy (substantive_at,
+ *    which the merged story keeps as the latest of them) that is newer than that read.
  *  - hidden: hidden only if EVERY cluster was hidden (hiding one part must not bury the rest).
  *  - feedback (one row per cluster): the most recently updated rating wins. Equal ratings are combined
  *    (earliest created_at, any recorded reason, union of rated publishers); a losing opposite rating is dropped.
@@ -325,8 +366,11 @@ function transferUserState(db: DB, target: number, others: number[]): void {
   if (bm.t !== null) db.prepare('INSERT OR REPLACE INTO bookmarks (cluster_id, created_at) VALUES (?, ?)').run(target, bm.t);
 
   const rs = db.prepare(`SELECT read_at, hidden_at FROM reading_state WHERE cluster_id IN (${marks})`).all(...all) as { read_at: number | null; hidden_at: number | null }[];
-  const everyone = (col: 'read_at' | 'hidden_at') => (rs.length === all.length && rs.every((r) => r[col] !== null) ? Math.max(...rs.map((r) => r[col]!)) : null);
-  const readAt = everyone('read_at'), hiddenAt = everyone('hidden_at');
+  const everyone = (col: 'hidden_at') => (rs.length === all.length && rs.every((r) => r[col] !== null) ? Math.max(...rs.map((r) => r[col]!)) : null);
+  const reads = rs.map((r) => r.read_at).filter((x): x is number => x !== null);
+  const readAt = reads.length ? Math.max(...reads) : null, hiddenAt = everyone('hidden_at');
+  const sub = db.prepare(`SELECT MAX(substantive_at) AS t FROM story_clusters WHERE id IN (${marks})`).get(...all) as { t: number | null };
+  if (sub.t !== null) db.prepare('UPDATE story_clusters SET substantive_at = ? WHERE id = ?').run(sub.t, target);
   if (readAt !== null || hiddenAt !== null || rs.length) {
     db.prepare(`INSERT INTO reading_state (cluster_id, read_at, hidden_at) VALUES (?,?,?)
       ON CONFLICT(cluster_id) DO UPDATE SET read_at = excluded.read_at, hidden_at = excluded.hidden_at`).run(target, readAt, hiddenAt);

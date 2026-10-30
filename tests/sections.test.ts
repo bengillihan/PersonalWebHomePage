@@ -30,7 +30,7 @@ describe('classification: sections follow what a story is about', () => {
   it('Local, Regional and Washington are separate, and a story may qualify for several', () => {
     expect([...has('Des Moines council approves marina plan')]).toEqual(['local']);
     expect([...has('Seattle council approves transit levy')]).toEqual(['regional']);
-    expect([...has('Olympia lawmakers debate new state tax')]).toEqual(['washington']);
+    expect([...has('Olympia lawmakers debate new state tax')].sort()).toEqual(['politics', 'washington']);
     expect([...has('Federal Way schools to get state funding as Olympia passes budget')].sort()).toEqual(['local', 'washington']);
     expect([...has('Kent warehouse fire closes Highway 167 in King County')].sort()).toEqual(['local', 'regional']);
   });
@@ -55,17 +55,17 @@ describe('classification: sections follow what a story is about', () => {
     expect([...has('Library hours extended for summer', 'Local', null, true)]).toEqual(['local']); // no place named, but a local publisher: "Local" stands
     expect([...has('Des Moines, Iowa school board closes two schools', 'Local')]).toEqual([]); // Gemini says "Local" for any town: not enough on its own
     expect([...has('Library hours extended for summer', 'Local')]).toEqual([]);
-    expect([...has('Seattle council approves transit levy', 'Politics')]).toEqual(['regional']); // local politics is not U.S. news
-    expect([...has('Olympia lawmakers advance new tax bill', 'Politics')]).toEqual(['washington']);
-    expect([...has('State Senate passes housing bill in Olympia', 'Politics')]).toEqual(['washington']); // a state Senate is not "the Senate"
-    expect([...has('Senate passes federal budget deal', 'Politics')]).toEqual(['us']);
-    expect([...has('Seattle delegation urges Congress to fund the airport', 'Politics')].sort()).toEqual(['regional', 'us']);
+    expect([...has('Seattle council approves transit levy', 'Politics')].sort()).toEqual(['politics', 'regional']); // local politics is not U.S. news
+    expect([...has('Olympia lawmakers advance new tax bill', 'Politics')].sort()).toEqual(['politics', 'washington']);
+    expect([...has('State Senate passes housing bill in Olympia', 'Politics')].sort()).toEqual(['politics', 'washington']); // a state Senate is not "the Senate"
+    expect([...has('Senate passes federal budget deal', 'Politics')].sort()).toEqual(['politics', 'us']);
+    expect([...has('Seattle delegation urges Congress to fund the airport', 'Politics')].sort()).toEqual(['politics', 'regional', 'us']);
   });
   it('REGRESSION: sports and entertainment stay in their own sections even when they name a local place', () => {
     expect([...has('Seattle edges San Francisco in overtime', 'Sports')]).toEqual(['sports']);
     expect([...has('Des Moines theater festival returns', 'Entertainment')]).toEqual([]);
   });
-  it('every section key is routable', () => { expect(SECTIONS).toEqual(['local', 'regional', 'washington', 'us', 'world', 'business', 'technology', 'sports']); });
+  it('every section key is routable', () => { expect(SECTIONS).toEqual(['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports']); });
 });
 
 describe('section feeds', () => {
@@ -117,14 +117,14 @@ describe('Front Page', () => {
     story(s, 'Federal Way schools get state funding as Olympia passes budget', { importance: 0.9, ageMin: 5 });
     const fp = queryFrontPage(db); const all = [fp.lead!, ...fp.secondary, ...fp.sections.flatMap((b) => b.items)].map((x) => x.id);
     expect(fp.lead).not.toBeNull(); expect(new Set(all).size).toBe(all.length);
-    expect(fp.secondary.length).toBeLessThanOrEqual(FRONT.secondary); for (const b of fp.sections) expect(b.items.length).toBeLessThanOrEqual(FRONT.perSection);
+    expect(fp.secondary.length).toBeLessThanOrEqual(FRONT.secondary); for (const b of fp.sections) expect(b.items.length).toBeLessThanOrEqual(Math.max(...FRONT.quota));
     expect(fp.sections.map((b) => b.key)).toEqual(expect.arrayContaining(['business', 'local']));
   });
   it('REGRESSION: stories that belong to no section (Health, Automotive, ...) still reach the Front Page, once', () => {
     const s = src('General'); const h = story(s, 'Hospitals report surge in respiratory illnesses', { ai: 'Health', importance: 0.2, ageMin: 900 });
     for (let i = 0; i < 10; i++) story(s, `Business story ${i}`, { ai: 'Business', importance: 0.6, ageMin: 10 + i });
     const fp = queryFrontPage(db); const all = [fp.lead!, ...fp.secondary, ...fp.sections.flatMap((b) => b.items)].map((x) => x.id);
-    expect(all).toContain(h); expect(new Set(all).size).toBe(all.length); expect(fp.sections.find((b) => b.key === 'more')!.items.map((x) => x.id)).toEqual([h]);
+    expect(all.filter((x) => x === h)).toHaveLength(1); expect(new Set(all).size).toBe(all.length); // on the page exactly once (as a secondary story or in "More stories")
   });
   it('the lead is the most relevant and important story, and empty sections are omitted', () => {
     const s = src('General'); const minor = story(s, 'Chipmaker shares jump', { ai: 'Business', importance: 0.3, ageMin: 300 }); const major = story(s, 'Kent flood closes schools', { importance: 0.95, ageMin: 20 });

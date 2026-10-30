@@ -115,7 +115,7 @@ export default function Feed({ filter, onStatus, onOpenSettings, newVersion, lay
     return (
       <div className="space-y-4">
         {layout === 'newspaper'
-          ? <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 lg:grid-cols-3">{items.map((s, i) => { const isLead = lead && i === 0; return <div key={s.id} className={isLead ? 'md:col-span-2 lg:col-span-3' : undefined}><StoryCard variant={isLead ? 'lead' : 'brief'} story={s} showImages={showImages} onChange={update} onRead={markRead} onGone={gone} /></div>; })}</div>
+          ? <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">{items.map((s, i) => { const isLead = lead && i === 0; return <div key={s.id} className={isLead ? 'md:col-span-2 xl:col-span-3' : undefined}><StoryCard variant={isLead ? 'lead' : 'brief'} story={s} showImages={showImages} onChange={update} onRead={markRead} onGone={gone} /></div>; })}</div>
           : items.map((s) => <StoryCard key={s.id} story={s} showImages={showImages} onChange={update} onRead={markRead} onGone={gone} />)}
         <div ref={sentinel} />
         {more && <div className="skeleton mx-auto h-8 w-40" aria-label="Loading more" />}

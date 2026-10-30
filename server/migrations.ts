@@ -270,4 +270,13 @@ ALTER TABLE topics ADD COLUMN weight INTEGER CHECK (weight IS NULL OR weight BET
 ALTER TABLE topics ADD COLUMN stance TEXT NOT NULL DEFAULT 'prefer' CHECK (stance IN ('prefer','less'));
 `,
   },
+  {
+    id: 8,
+    name: 'story_substantive_version',
+    // Read state is judged against the story's SUBSTANTIVE version, not against updated_at (which moves whenever any coverage joins). NULL = no
+    // substantive development has ever been recorded, so a read story stays read. Additive and nullable: no existing row is rewritten.
+    sql: `
+ALTER TABLE story_clusters ADD COLUMN substantive_at INTEGER;
+`,
+  },
 ];

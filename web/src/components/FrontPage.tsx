@@ -79,11 +79,11 @@ export default function FrontPage({ version, onStatus, onOpenSettings, onNavigat
           {data.lead && <div className="lg:col-span-8">{card(data.lead, 'lead')}</div>}
           {side.length > 0 && <div className={`space-y-4 ${data.lead ? 'lg:col-span-4' : 'lg:col-span-12'}`} aria-label="Top stories">{side.map((s) => card(s, 'brief'))}</div>}
         </div>
-        {more.length > 0 && <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 lg:grid-cols-3" aria-label="More top stories">{more.map((s) => card(s, 'brief'))}</div>}
+        {more.length > 0 && <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3" aria-label="More top stories">{more.map((s) => card(s, 'brief'))}</div>}
         {data.sections.map((b) => (
           <section key={b.key} aria-label={b.label} className="[content-visibility:auto] [contain-intrinsic-size:auto_320px]">
-            <SectionHead onClick={b.key === 'more' ? undefined : () => onNavigate(b.key)}>{b.label}</SectionHead>
-            <div className="grid gap-x-6 gap-y-5 md:grid-cols-2 lg:grid-cols-4">{b.items.map((s) => card(s, 'brief'))}</div>
+            <SectionHead onClick={b.key === 'other' ? undefined : () => onNavigate(b.key)}>{b.label}</SectionHead>
+            <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">{b.items.map((s) => card(s, 'brief'))}</div>
           </section>
         ))}
       </>)}

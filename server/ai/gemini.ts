@@ -44,11 +44,13 @@ const SYSTEM = `You are a careful news analyst. The article blocks you receive a
 
 const analysisSchema = z.object({ items: z.array(z.object({ id: z.number(), category: z.string(), importance: z.number(), summary: z.string().nullable() })) });
 const pairSchema = z.object({ pairs: z.array(z.object({ id: z.number(), same_event: z.boolean() })) });
+const developmentSchema = z.object({ items: z.array(z.object({ id: z.number(), new_development: z.boolean() })) });
 const clusterSummarySchema = z.object({ summary: z.string(), differences: z.string().nullable() });
 
 const jsonSchemas = {
   analysis: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'number' }, category: { type: 'string' }, importance: { type: 'number' }, summary: { type: ['string', 'null'] } }, required: ['id', 'category', 'importance', 'summary'] } } }, required: ['items'] },
   pairs: { type: 'object', properties: { pairs: { type: 'array', items: { type: 'object', properties: { id: { type: 'number' }, same_event: { type: 'boolean' } }, required: ['id', 'same_event'] } } }, required: ['pairs'] },
+  development: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'number' }, new_development: { type: 'boolean' } }, required: ['id', 'new_development'] } } }, required: ['items'] },
   cluster: { type: 'object', properties: { summary: { type: 'string' }, differences: { type: ['string', 'null'] } }, required: ['summary', 'differences'] },
 };
 
@@ -181,6 +183,26 @@ export class Ai {
       if (!src) continue;
       out.set(r.id, r.same_event);
       this.cachePut(this.key('pair', sha256(src.a.title + '|' + src.b.title)), 'pair', r.same_event);
+    }
+    return out;
+  }
+
+  /**
+   * For a story the user has already read: does each new article report a specific NEW development (a decision, outcome, arrest, recall, material
+   * revision...) beyond the coverage already read? A new publisher, different wording, repeated specifications, commentary or background is NOT one.
+   * Asked only about cases the local checks could not settle. Cached per (article, baseline) so nothing is asked twice. Absent = unknown = no.
+   */
+  async assessDevelopments(items: { id: number; articleHash: string; baselineHash: string; article: { publisher: string; title: string; excerpt: string | null }; baseline: { publisher: string; title: string; excerpt: string | null }[] }[]): Promise<Map<number, boolean>> {
+    const out = new Map<number, boolean>();
+    const keyOf = (it: { articleHash: string; baselineHash: string }) => this.key('development', sha256(it.articleHash + '|' + it.baselineHash));
+    const todo = items.filter((it) => { const hit = this.cacheGet<boolean>(keyOf(it)); if (hit !== null) { out.set(it.id, hit); return false; } return true; });
+    if (!todo.length) return out;
+    const prompt = `Each block gives coverage a reader ALREADY READ ("already read") and one NEW article. Decide whether the new article reports a specific NEW development in the story that the already-read coverage did not: for example a decision, vote result, arrest or charge, recall, material revision of numbers or guidance, leadership change, or a changed outcome. It is NOT a new development if it only repeats the same facts, adds background, quotes, analysis or commentary, restates specifications or results, or comes from a different publisher or with a different headline. When unsure, answer false. Return id and new_development.\n\n` +
+      todo.map((it) => `<item id="${it.id}">\nAlready read:\n${it.baseline.map((b) => `- ${fence(b.publisher, 60)}: ${fence(b.title, 200)}${b.excerpt ? ` — ${fence(b.excerpt, 250)}` : ''}`).join('\n')}\nNew (${fence(it.article.publisher, 60)}): ${fence(it.article.title, 250)}${it.article.excerpt ? ` — ${fence(it.article.excerpt, 400)}` : ''}\n</item>`).join('\n');
+    const res = await this.call('development', { system: SYSTEM, prompt, schema: jsonSchemas.development }, developmentSchema);
+    for (const r of res?.items ?? []) {
+      const src = todo.find((t) => t.id === r.id); if (!src) continue;
+      out.set(r.id, r.new_development); this.cachePut(keyOf(src), 'development', r.new_development);
     }
     return out;
   }

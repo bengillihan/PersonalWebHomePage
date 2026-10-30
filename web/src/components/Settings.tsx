@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, fullDate, timeAgo } from '../api';
-import type { BlockedTopic, GeoPrefs, Prefs, Quote, Source, Story, Topic } from '../types';
+import type { BlockedTopic, FrontMix, GeoPrefs, Prefs, Quote, Source, Story, Topic } from '../types';
 import StoryCard from './StoryCard';
 
-export const PANELS: [string, string][] = [['sources', 'Sources'], ['interests', 'Interests'], ['geography', 'Geography'], ['watchlist', 'Watchlist'], ['saved', 'Saved'], ['preferences', 'Preferences'], ['diagnostics', 'Diagnostics']];
+export const PANELS: [string, string][] = [['sources', 'Sources'], ['interests', 'Interests'], ['geography', 'Geography'], ['frontmix', 'Front Page Mix'], ['watchlist', 'Watchlist'], ['saved', 'Saved'], ['preferences', 'Preferences'], ['diagnostics', 'Diagnostics']];
 
 const Field = ({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) => (
   <label className="block text-sm"><span className="mb-1 block font-medium">{label}</span>{children}{hint && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}</label>
@@ -26,6 +26,7 @@ export default function Settings({ panel, setPanel, onClose, onChanged, onTheme 
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
             {panel === 'sources' && <Sources onChanged={onChanged} />}
             {panel === 'interests' && <Interests onChanged={onChanged} />}
+            {panel === 'frontmix' && <FrontMixPanel onChanged={onChanged} />}
             {panel === 'geography' && <Geography onChanged={onChanged} />}
             {panel === 'watchlist' && <Watchlist onChanged={onChanged} />}
             {panel === 'saved' && <Saved />}
@@ -211,6 +212,49 @@ function Saved() {
   if (!items) return <div className="skeleton h-24 w-full" />;
   return <div className="space-y-4"><h3 className="text-base font-semibold">Saved stories</h3>{items.length === 0 && <p className="text-sm text-slate-500">Nothing saved yet.</p>}
     {items.map((s) => <StoryCard key={s.id} story={s} showImages={false} onChange={(n) => setItems((p) => p!.map((x) => (x.id === n.id ? n : x)))} onGone={(id) => setItems((p) => p!.filter((x) => x.id !== id))} />)}</div>;
+}
+
+/* ---------------- Front Page Mix ---------------- */
+const MIX_FIELDS: [keyof FrontMix['weights'], string, string][] = [
+  ['local', 'Local', 'Des Moines, Federal Way, SeaTac, Kent, Burien and South King County'], ['regional', 'Regional', 'Greater Seattle and the Puget Sound area'], ['washington', 'Washington', 'Statewide news and Olympia'],
+  ['us', 'U.S.', 'National news'], ['world', 'World', 'International news'], ['politics', 'Politics', 'Elections, Congress, legislation and government policy'],
+  ['business', 'Business', 'Markets, the economy, companies and energy'], ['technology', 'Technology', 'AI, cybersecurity, software and hardware'], ['sports', 'Sports', 'Sports coverage (blocked subjects stay blocked)'], ['other', 'Other', 'Health, science, automotive and everything else ("More stories")'],
+];
+function FrontMixPanel({ onChanged }: { onChanged: () => void }) {
+  const { data, reload } = useLoad<{ mix: FrontMix; defaults: FrontMix }>('/api/front-mix');
+  const [m, setM] = useState<FrontMix | null>(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { if (data) setM(data.mix); }, [data]);
+  if (!m || !data) return <div className="skeleton h-40 w-full" />;
+  const save = async (body: FrontMix) => { try { await api('/api/front-mix', { method: 'PUT', body }); setErr(null); setSaved(true); setTimeout(() => setSaved(false), 1500); await reload(); onChanged(); } catch (e) { setErr((e as Error).message); } };
+  return (
+    <div className="space-y-5">
+      <div><h3 className="text-base font-semibold">Front Page Mix</h3><p className="text-sm text-slate-500">How much each category matters on the Front Page, from 0 to 5. It works alongside each story’s own relevance and importance, and no category can fill the page. <b>0 leaves the category off the Front Page only</b>: its own tab, Search and Saved are unaffected. This is separate from your interest weights and Show more / Show less. Changes apply immediately, from stories already stored.</p></div>
+      <div className="card space-y-3 p-4">
+        {MIX_FIELDS.map(([k, label, hint]) => (
+          <div key={k}>
+            <div className="grid grid-cols-[5.5rem_1fr_6.5rem] items-center gap-x-3 sm:grid-cols-[8rem_1fr_9rem]">
+              <label htmlFor={`mix-${k}`} className="text-sm font-medium">{label}</label>
+              <input id={`mix-${k}`} type="range" min={0} max={5} step={1} value={m.weights[k]} aria-valuetext={m.weights[k] === 0 ? 'off the Front Page' : `${m.weights[k]} of 5`} onChange={(e) => setM({ ...m, weights: { ...m.weights, [k]: Number(e.target.value) } })} className="w-full accent-indigo-600" />
+              <span className={`text-right text-xs tabular-nums sm:text-sm ${m.weights[k] === 0 ? 'text-amber-700 dark:text-amber-300' : ''}`}>{m.weights[k] === 0 ? 'Off Front Page' : `${m.weights[k]} of 5`}</span>
+            </div>
+            <p className="text-xs text-slate-500">{hint}</p>
+          </div>
+        ))}
+      </div>
+      <div className="card space-y-2 p-4">
+        <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={m.majorException} onChange={(e) => setM({ ...m, majorException: e.target.checked })} />
+          <span><b>Let major breaking stories through low weights.</b> A story at or above the importance below is treated as at least weight 4 in its category. It never overrides a weight of 0 or a blocked topic.</span></label>
+        <label className="flex items-center gap-2 pl-6 text-sm">Major story importance
+          <select className="input !w-auto !py-1" disabled={!m.majorException} value={m.majorThreshold} onChange={(e) => setM({ ...m, majorThreshold: Number(e.target.value) })}>{[0.6, 0.7, 0.8, 0.9].map((v) => <option key={v} value={v}>{Math.round(v * 100)}%</option>)}</select></label>
+      </div>
+      {err && <p className="text-sm text-red-600" role="alert">{err}</p>}
+      <div className="flex items-center gap-2">
+        <button className="btn btn-primary" onClick={() => save(m)}>Save</button>
+        <button className="btn btn-outline" onClick={() => { setM(data.defaults); void save(data.defaults); }}>Reset to defaults</button>
+        {saved && <span className="text-sm text-emerald-600" role="status">Saved</span>}
+      </div>
+    </div>
+  );
 }
 
 /* ---------------- Geography ---------------- */

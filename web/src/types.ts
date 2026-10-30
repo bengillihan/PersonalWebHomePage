@@ -35,6 +35,7 @@ export interface WeatherView {
   forecast: { timezone: string; current: { tempF: number; description: string; icon: string }; days: WeatherDay[] } | null;
   attribution: { text: string; url: string }[];
 }
+export interface FrontMix { weights: Record<'local' | 'regional' | 'washington' | 'us' | 'world' | 'politics' | 'business' | 'technology' | 'sports' | 'other', number>; majorException: boolean; majorThreshold: number }
 export interface GeoPrefs { local: string[]; localPriority: string[]; regional: string[]; washington: string[] }
 export interface FrontPageData {
   lead: Story | null; secondary: Story[]; sections: { key: string; label: string; items: Story[] }[];

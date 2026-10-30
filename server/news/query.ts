@@ -3,8 +3,8 @@ import { getPrefs } from '../settings.js';
 import { balanceFeed, buildFeedbackModel, INTEREST_MATCH, scoreCandidate, type Candidate, type Scored } from './rank.js';
 import { loadTopics, weightFactor } from './topics.js';
 import { isUsableSummary } from './cluster.js';
-import { classify, isSection, SECTIONS, SECTION_LABEL, LOCAL_PRIORITY_BOOST, type Section } from './sections.js';
-import { getGeo } from '../settings.js';
+import { classify, isSection, SECTION_LABEL, LOCAL_PRIORITY_BOOST, type Section } from './sections.js';
+import { FRONT_KEYS, getFrontMix, getGeo, type FrontKey } from '../settings.js';
 
 export interface FeedQuery { tab: string; q?: string; topic?: string; cursor?: string; limit?: number }
 export interface StoryDto {
@@ -46,7 +46,7 @@ const esc = (s: string) => s.replace(/[\\%_]/g, (m) => '\\' + m);
 const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const dec = (s?: string) => { try { return s ? JSON.parse(Buffer.from(s, 'base64url').toString()) : null; } catch { return null; } };
 
-const BASE_SELECT = `SELECT c.id, c.title, c.summary, c.summary_kind, c.differences, c.category, c.importance, c.last_published_at, c.updated_at, c.source_count,
+const BASE_SELECT = `SELECT c.id, c.title, c.summary, c.summary_kind, c.differences, c.category, c.importance, c.last_published_at, c.updated_at, c.substantive_at, c.source_count,
   c.primary_article_id, rs.read_at, rs.hidden_at, (b.cluster_id IS NOT NULL) AS bookmarked, COALESCE(f.rating, 0) AS rating
   FROM story_clusters c
   LEFT JOIN reading_state rs ON rs.cluster_id = c.id
@@ -66,8 +66,8 @@ function commonFilters(prefs: ReturnType<typeof getPrefs>, tab: string, feedView
   if (tab === 'unread') where.push('rs.read_at IS NULL'); // strictly unread
   // Read stories are hidden from the main feeds unless 'Show read stories' is on. Never hidden in Saved, in Unread's own rule above, or in
   // search (so previously viewed articles stay findable). Read is per story (cluster); a story reappears, marked Updated, when it gained
-  // substantial new information after being read (updated_at is bumped by new coverage, material corrections and merges, not by cosmetic edits).
-  if (!prefs.showRead && !['saved', 'unread'].includes(tab) && !searching) where.push('(rs.read_at IS NULL OR c.updated_at > rs.read_at)');
+  // substantial new information after being read (substantive_at is advanced only by a material development such as a publisher correction; new coverage and merges of the same event do not reopen it).
+  if (!prefs.showRead && !['saved', 'unread'].includes(tab) && !searching) where.push('(rs.read_at IS NULL OR c.substantive_at > rs.read_at)');
 }
 
 /** The stories of one section, best first: the usual relevance score (recency included), with the user's closest places lifted within Local. */
@@ -142,34 +142,68 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   return { items: hydrate(db, page, why, prefs.mutedPublishers), nextCursor: next.length ? enc({ r: next, t: total }) : null, total };
 }
 
-export interface FrontPage { lead: StoryDto | null; secondary: StoryDto[]; sections: { key: Section | 'more'; label: string; items: StoryDto[] }[] }
-export const FRONT = { secondary: 6, perSection: 4, more: 4 } as const;
+export interface FrontPage { lead: StoryDto | null; secondary: StoryDto[]; sections: { key: FrontKey; label: string; items: StoryDto[] }[] }
+/** secondaryPerCategory: how many of the secondary stories one category may take. quota[w]: stories a section block shows for category weight w. */
+export const FRONT = { secondary: 6, secondaryPerCategory: 2, quota: [0, 1, 2, 3, 3, 4] as readonly number[], majorFloor: 4 } as const;
+/**
+ * A story that belongs to several categories is placed under ONE, the most specific (this order), whatever the weights are. If that category is
+ * switched off (weight 0) the story is left off the Front Page: it is never handed to another category with a higher weight, so a weight of 0 can
+ * never make a story more prominent. Municipal and local-infrastructure stories are placed by their place (Local/Regional/Washington) before
+ * Politics, and Business/Technology stories keep their topic even when they mention legislation (Politics needs a political main event).
+ */
+const PRIMARY_ORDER: FrontKey[] = ['local', 'regional', 'washington', 'politics', 'business', 'technology', 'sports', 'us', 'world', 'other'];
+const FRONT_LABEL = (k: FrontKey) => (k === 'other' ? 'More stories' : SECTION_LABEL[k]);
 
 /**
- * The Front Page, built from ONE ranked pool (the same filters, scoring and snapshot ordering as For You), so it costs about one feed request:
- * a lead story (relevance and importance), secondary stories, then one block per section. Every story appears once: whatever the lead or an
- * earlier block took is skipped by the later ones. Nothing here calls Gemini.
+ * The Front Page, built from ONE ranked pool (the same filters and scoring as For You) and the Front Page Mix:
+ *  - every story gets one primary category (see PRIMARY_ORDER), independent of the weights; if that category's weight is 0 the story is left off the
+ *    Front Page (it is still in its section, Search and Saved);
+ *  - its Front Page score is its usual relevance score scaled by the category weight (weight 5 = full strength, 1 = well below), so category priority
+ *    and story relevance/importance both count;
+ *  - a story at or above the major-news importance gets a weight floor, so breaking news is not buried by a low weight (never above 0);
+ *  - diversity: the secondary stories take at most `secondaryPerCategory` per category and each section block shows at most quota[weight] stories,
+ *    so one busy category cannot fill the page;
+ *  - each story appears once (lead, secondary, or its own primary section). Nothing here calls Gemini.
  */
 export function queryFrontPage(db: DB): FrontPage {
-  const prefs = getPrefs(db); const geo = getGeo(db);
+  const prefs = getPrefs(db); const geo = getGeo(db); const mix = getFrontMix(db);
   const where: string[] = []; const params: any[] = [];
   commonFilters(prefs, 'foryou', true, false, where, params);
   params[0] = Math.max(params[0], Date.now() - 14 * 86_400_000);
   const pool = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} ORDER BY c.last_published_at DESC LIMIT ${SNAPSHOT_MAX}`).all(...params) as any[];
-  const scored = scoreRows(db, pool);
-  const ordered = balanceFeed(scored, prefs.quotas);
-  const used = new Set<number>();
-  const take = (list: Scored[], n: number) => { const out: Scored[] = []; for (const s of list) { if (out.length >= n) break; if (!used.has(s.c.id)) { used.add(s.c.id); out.push(s); } } return out; };
-  const lead = take([...ordered].sort((a, b) => (b.score * 0.6 + b.parts.importance * 0.4) - (a.score * 0.6 + a.parts.importance * 0.4)), 1);
-  const secondary = take(ordered, FRONT.secondary);
-  const blocks = SECTIONS.map((key) => ({ key, picks: take(sectionOrder(scored, pool, key, geo), FRONT.perSection) })).filter((b) => b.picks.length);
-  // Stories that belong to no section (Health, Science, Automotive, Entertainment, ...) would otherwise be reachable only from Compact Feed.
   const rows = new Map(pool.map((r) => [r.id, r]));
-  const unsectioned = ordered.filter((s) => { const r = rows.get(s.c.id); return classify({ category: r.category, title: r.title, summary: r.summary, localSource: s.c.isLocal }, geo).sections.size === 0; });
-  const more = take(unsectioned, FRONT.more);
-  const why = new Map([...lead, ...secondary, ...blocks.flatMap((b) => b.picks), ...more].map((x) => [x.c.id, x]));
-  const dto = (picks: Scored[]) => hydrate(db, picks.map((x) => rows.get(x.c.id)), why, prefs.mutedPublishers);
-  return { lead: dto(lead)[0] ?? null, secondary: dto(secondary), sections: [...blocks.map((b) => ({ key: b.key, label: SECTION_LABEL[b.key], items: dto(b.picks) })), ...(more.length ? [{ key: 'more' as const, label: 'More stories', items: dto(more) }] : [])] };
+  interface P { s: Scored; place: FrontKey; w: number; final: number; boost: number }
+  const items: P[] = [];
+  for (const s of scoreRows(db, pool)) {
+    if (s.c.rating === -1 || (s.c.excluded && s.bucket !== 'major')) continue; // same drops as the For You feed
+    const r = rows.get(s.c.id); const cls = classify({ category: r.category, title: r.title, summary: r.summary, localSource: s.c.isLocal }, geo);
+    const major = mix.majorException && s.parts.importance >= mix.majorThreshold;
+    const weightOf = (k: FrontKey) => { const w = mix.weights[k]; return w > 0 && major ? Math.max(w, FRONT.majorFloor) : w; };
+    const cats = (cls.sections.size ? [...cls.sections] : ['other']) as FrontKey[];
+    const place = PRIMARY_ORDER.find((k) => cats.includes(k)) ?? 'other'; // the story's main category, decided WITHOUT looking at any weight
+    const w = weightOf(place);
+    if (w <= 0) continue; // its main category is switched off: the story stays off the page rather than moving to a category with a higher weight
+    items.push({ s, place, w, final: s.score * (0.3 + 0.7 * (w / 5)), boost: place === 'local' && cls.localPriority ? LOCAL_PRIORITY_BOOST : 0 });
+  }
+  const byFinal = (a: P, b: P) => b.final - a.final;
+  const used = new Set<number>(); const take = (p: P) => { used.add(p.s.c.id); return p; };
+  const leadScore = (p: P) => (0.3 + 0.7 * (p.w / 5)) * (p.s.score * 0.6 + p.s.parts.importance * 0.4); // relevance and importance, both scaled by the category weight
+  const lead = [...items].sort((a, b) => leadScore(b) - leadScore(a)).slice(0, 1).map(take);
+  const perCat = new Map<FrontKey, number>(); const secondary: P[] = [];
+  for (const p of [...items].sort(byFinal)) {
+    if (secondary.length >= FRONT.secondary) break;
+    if (used.has(p.s.c.id) || (perCat.get(p.place) ?? 0) >= FRONT.secondaryPerCategory) continue;
+    perCat.set(p.place, (perCat.get(p.place) ?? 0) + 1); secondary.push(take(p));
+  }
+  const keys = FRONT_KEYS.filter((k) => mix.weights[k] > 0).sort((a, b) => mix.weights[b] - mix.weights[a]); // heavier categories first; ties keep the nav order
+  const blocks = keys.map((key) => {
+    const quota = FRONT.quota[mix.weights[key]] ?? 0;
+    const mine = items.filter((p) => p.place === key && !used.has(p.s.c.id)).sort((a, b) => (b.final + b.boost) - (a.final + a.boost)).slice(0, quota);
+    mine.forEach(take); return { key, picks: mine };
+  }).filter((b) => b.picks.length);
+  const why = new Map([...lead, ...secondary, ...blocks.flatMap((b) => b.picks)].map((x) => [x.s.c.id, x.s]));
+  const dto = (picks: P[]) => hydrate(db, picks.map((x) => rows.get(x.s.c.id)), why, prefs.mutedPublishers);
+  return { lead: dto(lead)[0] ?? null, secondary: dto(secondary), sections: blocks.map((b) => ({ key: b.key, label: FRONT_LABEL(b.key), items: dto(b.picks) })) };
 }
 
 function scoreRows(db: DB, rows: any[]): Scored[] {
@@ -248,7 +282,7 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
       summary: mutedHere ? own?.summary ?? null : r.summary, summaryKind: mutedHere ? (own ? own.summary_kind : 'headline') : r.summary_kind, differences: mutedHere ? null : r.differences, category: r.category,
       importance: r.importance, publishedAt: r.last_published_at, updatedAt: r.updated_at,
       sourceCount: unmuted.length ? publishers(unmuted) : r.source_count, mutedSources: unmuted.length ? publishers(list.filter(isMuted)) : 0, // nothing unmuted to prefer: show the real coverage
-      isRead: !!r.read_at, isUpdated: !!r.read_at && r.updated_at > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
+      isRead: !!r.read_at, isUpdated: !!r.read_at && (r.substantive_at ?? 0) > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
       imageUrl: prim?.image_url ?? null,
       primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator' } : null,
       articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [], muted: isMuted(a) })),

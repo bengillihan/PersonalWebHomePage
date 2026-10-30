@@ -64,7 +64,7 @@ function applyCorrection(db: DB, ex: ExistingArticle, item: FeedItem, contentHas
     db.prepare('UPDATE story_clusters SET summary_hash=? WHERE id=? AND summary_hash=?').run(clusterContentHash(hashes()), ex.cluster_id, clusterHashBefore);
   }
   if (ex.cluster_id) {
-    recomputeCluster(db, ex.cluster_id, material); // refreshes title/primary; single-article clusters also take the new summary
+    recomputeCluster(db, ex.cluster_id, material, material); // refreshes title/primary; single-article clusters also take the new summary
     if (material) { // a consolidated multi-source summary was written from the old text: fall back to the primary's summary until AI regenerates it
       db.prepare(`UPDATE story_clusters SET differences=NULL, summary_hash=NULL,
         summary=(SELECT summary FROM articles WHERE id = story_clusters.primary_article_id),

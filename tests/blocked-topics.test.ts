@@ -195,7 +195,7 @@ describe('changes take effect immediately, without a refresh', () => {
 
   it('keeps hard exclusions separate from soft thumbs-down feedback, and preserves all user data', async () => {
     const a = src('Alpha'), b = src('Beta'); const hockey = story(a, 'Hockey: Kraken edge Canucks'), other = story(b, 'Harbor repairs finish early');
-    db.prepare('INSERT INTO bookmarks VALUES (?,5)').run(hockey.cluster); db.prepare('INSERT INTO reading_state (cluster_id, read_at) VALUES (?,9)').run(hockey.cluster);
+    db.prepare('INSERT INTO bookmarks VALUES (?,5)').run(hockey.cluster); db.prepare('INSERT INTO reading_state (cluster_id, read_at) VALUES (?,9)').run(hockey.cluster); db.prepare('UPDATE story_clusters SET substantive_at = 10 WHERE id = ?').run(hockey.cluster); // read, then materially updated
     expect((await call('POST', `/api/stories/${other.cluster}/feedback`, { rating: -1, reason: 'topic' })).statusCode).toBe(200); // a SOFT dislike
     expect(count('SELECT COUNT(*) n FROM blocked_topics')).toBe(0); // ...does not create a hard block
     expect(await feedIds()).toEqual(asc(hockey.cluster, other.cluster)); // Latest still shows a thumbs-downed story: soft feedback only affects ranking

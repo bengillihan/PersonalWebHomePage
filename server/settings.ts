@@ -54,3 +54,23 @@ export function getGeo(db: DB): GeoPrefs {
   return { local: cleanList(s.local, DEFAULT_GEO.local), localPriority: cleanList(s.localPriority, DEFAULT_GEO.localPriority), regional: cleanList(s.regional, DEFAULT_GEO.regional), washington: cleanList(s.washington, DEFAULT_GEO.washington) };
 }
 export function saveGeo(db: DB, geo: GeoPrefs): void { setSetting(db, 'geo', geo); }
+
+/**
+ * Front Page Mix: how much each category matters on the FRONT PAGE only (0 = leave it off the Front Page; its own section, Search and Saved are
+ * unaffected). Separate from article-interest weights and Show more / Show less. Stored in SQLite so it follows the account across devices.
+ */
+export const FRONT_KEYS = ['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'other'] as const;
+export type FrontKey = (typeof FRONT_KEYS)[number];
+export interface FrontMix { weights: Record<FrontKey, number>; majorException: boolean; majorThreshold: number }
+export const DEFAULT_FRONT_MIX: FrontMix = {
+  weights: { local: 5, regional: 4, washington: 3, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, other: 2 },
+  majorException: true, majorThreshold: 0.8,
+};
+export function getFrontMix(db: DB): FrontMix {
+  const s = getSetting<Partial<FrontMix> & { weights?: Partial<Record<FrontKey, number>> }>(db, 'front_mix', {});
+  const weights = { ...DEFAULT_FRONT_MIX.weights };
+  for (const k of FRONT_KEYS) { const v = s.weights?.[k]; if (Number.isInteger(v) && v! >= 0 && v! <= 5) weights[k] = v!; }
+  const t = s.majorThreshold;
+  return { weights, majorException: typeof s.majorException === 'boolean' ? s.majorException : DEFAULT_FRONT_MIX.majorException, majorThreshold: typeof t === 'number' && t >= 0.5 && t <= 1 ? t : DEFAULT_FRONT_MIX.majorThreshold };
+}
+export function saveFrontMix(db: DB, mix: FrontMix): void { setSetting(db, 'front_mix', mix); }

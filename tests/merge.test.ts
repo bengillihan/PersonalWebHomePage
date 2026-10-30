@@ -87,12 +87,13 @@ describe('mergeClusters preserves user state (regression: merge used to cascade-
     expect(count('SELECT COUNT(*) n FROM feedback_sources')).toBe(2);
   });
 
-  it('read state: unread wins; read only when every merged story was read; hidden only when all were hidden', () => {
+  it('REGRESSION: read state: reading either copy counts as reading the event; hidden only when all were hidden', () => {
     const a = story('A'), b = story('B');
     db.prepare('INSERT INTO reading_state (cluster_id, read_at, hidden_at) VALUES (?,?,?)').run(b.cluster, 111, 222);
     mergeClusters(db, [a.cluster, b.cluster]);
-    expect(readState(a.cluster)).toEqual({ read_at: null, hidden_at: null }); // a was untouched => unread & visible
-    expect(queryFeed(db, { tab: 'unread' }).items.map((i) => i.id)).toContain(a.cluster);
+    expect(readState(a.cluster)).toEqual({ read_at: 111, hidden_at: null }); // b was read, a untouched: the merged event is read; one hidden copy does not bury the rest
+    expect(queryFeed(db, { tab: 'unread' }).items.map((i) => i.id)).not.toContain(a.cluster);
+    expect(queryFeed(db, { tab: 'latest' }).items.map((i) => i.id)).not.toContain(a.cluster); // and it is not resurfaced as "Updated"
 
     const c = story('C'), d = story('D');
     db.prepare('INSERT INTO reading_state (cluster_id, read_at, hidden_at) VALUES (?,?,?)').run(c.cluster, 100, 300);

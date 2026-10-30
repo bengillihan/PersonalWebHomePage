@@ -38,10 +38,18 @@ export default function Weather({ version, variant = 'card', onOpen }: { version
   const f = w.forecast;
   if (variant === 'strip') {
     const today = f?.days[0];
-    return !f ? null : (
+    // Freshness comes from the data the forecast already carries (fetchedAt / stale / error); the strip makes no request of its own.
+    const failed = w.error ? `Couldn’t refresh just now (${w.error})` : null;
+    if (!f) return failed ? <p className="border-y border-slate-200 px-1 py-1.5 text-xs text-amber-700 dark:border-slate-800 dark:text-amber-300" role="status">⚠ Weather unavailable: {w.error}</p> : null;
+    return (
       <section aria-label="Weather summary" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-y border-slate-200 px-1 py-1.5 text-sm dark:border-slate-800">
         <b className="font-semibold">{w.location.label}</b><span>{f.current.icon} {f.current.tempF}°F · {f.current.description}</span>
         {today && <span className="text-slate-500">High {today.highF}° · Low {today.lowF}°{today.precipPct != null ? ` · 💧 ${today.precipPct}%` : ''}</span>}
+        <span className="flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
+          {w.stale && <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="Older than the refresh interval; it refreshes the next time you open the dashboard">Cached forecast{w.refreshing ? ' · updating…' : ''}</span>}
+          {w.fetchedAt && <span>Updated {timeAgo(w.fetchedAt)}</span>}
+          {failed && <span className="text-amber-700 dark:text-amber-300" role="status" title={failed}>⚠ Refresh failed</span>}
+        </span>
         <span className="flex-1" />{onOpen && <button className="text-xs underline hover:text-indigo-600" onClick={onOpen}>5-day forecast →</button>}
       </section>
     );

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, fullDate, timeAgo } from '../api';
 import type { Story } from '../types';
 import BlockTopicForm from './BlockTopicForm';
+import ActionMenu, { type MenuItem } from './ActionMenu';
 
 const REASONS: [string, string][] = [['topic', 'Not interested in this topic'], ['already_knew', 'Already knew this'], ['low_importance', 'Low importance'], ['source', "Don't like this source"], ['duplicate', 'Duplicate']];
 const SHELL: Record<CardVariant, string> = { card: 'card p-4 sm:p-5', lead: 'border-b-2 border-slate-900 pb-5 dark:border-slate-100', brief: 'border-b border-slate-200 pb-3 dark:border-slate-800' };
@@ -18,6 +19,7 @@ export type CardVariant = 'card' | 'lead' | 'brief';
 /** `card` is the Compact Feed card; `lead` and `brief` are the newspaper layouts (same controls, tighter type and a lead image). */
 export default function StoryCard({ story, showImages, onChange, onGone, onRead, variant = 'card' }: { variant?: CardVariant; story: Story; showImages: boolean; onChange: (s: Story) => void; onGone: (id: number) => void; onRead?: (s: Story, read: boolean, via: 'button' | 'link') => void }) {
   const [open, setOpen] = useState(false);
+  const [fullSummary, setFullSummary] = useState(false);
   const [why, setWhy] = useState(false);
   const [askReason, setAskReason] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -39,13 +41,25 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
     setWhy(!why);
     if (!why && !expl) { try { setExpl(await api(`/api/stories/${story.id}/why`)); } catch { /* shown as unavailable */ } }
   };
+  const toggleBookmark = () => run(() => api(`/api/stories/${story.id}/bookmark`, { method: 'POST', body: { on: !story.bookmarked } }), { bookmarked: !story.bookmarked });
+  const thumbUp = () => rate(story.rating === 1 ? 0 : 1);
+  const thumbDown = () => (story.rating === -1 ? rate(0) : (setAskReason(true), rate(-1)));
+  const hide = () => run(() => api(`/api/stories/${story.id}/hide`, { method: 'POST', body: { hidden: true } }), {}).then(() => onGone(story.id));
+  const coverageCount = story.sourceCount + story.mutedSources;
+  const menuItems: MenuItem[] = [
+    { key: 'up', label: 'Thumbs up: more like this', ariaLabel: 'Thumbs up', checked: story.rating === 1, onSelect: thumbUp },
+    { key: 'down', label: 'Thumbs down: less like this', ariaLabel: 'Thumbs down', checked: story.rating === -1, onSelect: thumbDown },
+    { key: 'why', label: 'Why recommended?', expanded: why, onSelect: () => void toggleWhy() },
+    ...(coverageCount > 1 ? [{ key: 'coverage', label: open ? 'Hide coverage' : `Coverage (${coverageCount} sources)`, expanded: open, onSelect: () => setOpen(!open) }] : []),
+    { key: 'hide', label: 'Hide story', onSelect: () => void hide() },
+  ];
   const summaryLabel = story.summaryKind === 'ai' ? 'AI summary' : story.summaryKind === 'excerpt' ? 'Publisher excerpt' : 'Headline only';
   const btn = (active: boolean) => `btn btn-ghost ${variant === 'brief' ? '!px-1.5 !py-1' : '!px-2'} ${active ? '!text-indigo-600 dark:!text-indigo-400' : ''}`;
 
   return (
-    <article className={`${SHELL[variant]} transition ${effectivelyRead ? 'opacity-60 hover:opacity-100' : ''}`} aria-label={story.title}>
+    <article className={`${SHELL[variant]} ${variant === 'brief' ? '@container' : ''} transition ${effectivelyRead ? 'opacity-60 hover:opacity-100' : ''}`} aria-label={story.title}>
       {variant === 'lead' && showImages && story.imageUrl && <img src={story.imageUrl} alt="" loading="eager" referrerPolicy="no-referrer" className="mb-3 aspect-[16/9] max-h-72 w-full rounded-sm object-cover sm:max-h-80 lg:aspect-[2/1]" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />}
-      <div className="flex gap-4">
+      <div className={variant === 'brief' ? 'flex flex-col gap-2 @sm:flex-row @sm:gap-4' : 'flex gap-4'}>
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
             <span className="font-semibold text-slate-800 dark:text-slate-100">{p?.publisher ?? 'Unknown'}</span>
@@ -60,32 +74,42 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
           <h2 className={HEADLINE[variant]}>
             {p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={() => !effectivelyRead && setRead(true, 'link')} className="hover:text-indigo-600 hover:underline dark:hover:text-indigo-400">{story.title}</a> : story.title}
           </h2>
-          {story.summary ? (
-            <p className={`mt-2 text-slate-700 dark:text-slate-300 ${variant === 'brief' ? 'line-clamp-3 text-sm leading-snug' : variant === 'lead' ? 'text-base leading-relaxed sm:text-lg' : 'text-[0.97rem] leading-relaxed'}`}>
-              {story.summary} <span className="ml-1 whitespace-nowrap text-xs text-slate-400">· {summaryLabel}</span>
-            </p>
+          {story.summary ? (<>
+            <p className={`mt-2 text-slate-700 dark:text-slate-300 ${variant === 'brief' ? `text-sm leading-snug ${fullSummary ? '' : 'line-clamp-3'}` : variant === 'lead' ? 'text-base leading-relaxed sm:text-lg' : 'text-[0.97rem] leading-relaxed'}`}>{story.summary}</p>
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-400"><span>{summaryLabel}</span>
+              {variant === 'brief' && story.summary.length > 150 && <button type="button" className="underline hover:text-slate-600 dark:hover:text-slate-200" aria-expanded={fullSummary} onClick={() => setFullSummary(!fullSummary)}>{fullSummary ? 'Show less' : 'Read more'}</button>}</p>
+          </>
           ) : variant === 'brief' ? null : (
             <p className="mt-2 text-sm italic text-slate-500">Headline only — the publisher feed provided no excerpt, so no summary is shown.</p>
           )}
           {story.differences && open && <p className="mt-2 rounded-lg bg-slate-50 p-2.5 text-sm text-slate-600 dark:bg-slate-800/60 dark:text-slate-300"><b>Differences between sources:</b> {story.differences}</p>}
         </div>
         {showImages && story.imageUrl && variant !== 'lead' && (
-          <img src={story.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className={variant === 'brief' ? 'h-16 w-20 flex-none rounded-sm object-cover' : 'hidden h-24 w-32 flex-none rounded-xl object-cover sm:block'} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+          <img src={story.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className={variant === 'brief' ? 'order-first h-28 w-full flex-none rounded-sm object-cover @sm:order-none @sm:h-16 @sm:w-20' : 'hidden h-24 w-32 flex-none rounded-xl object-cover sm:block'} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
         )}
       </div>
 
       {story.why && variant !== 'brief' && <p className="mt-2 text-xs text-slate-500">{story.why.reasons[0]}</p>}
 
-      <div className={`flex flex-wrap items-center border-slate-100 dark:border-slate-800 ${variant === 'brief' ? 'mt-2 gap-0 border-t pt-1.5' : 'mt-3 gap-1 border-t pt-2.5'}`}>
-        <button className={btn(story.rating === 1)} aria-pressed={story.rating === 1} aria-label="Thumbs up" title="More like this" onClick={() => rate(story.rating === 1 ? 0 : 1)}><Icon d={UP} fill={story.rating === 1} /></button>
-        <button className={btn(story.rating === -1)} aria-pressed={story.rating === -1} aria-label="Thumbs down" title="Less like this" onClick={() => (story.rating === -1 ? rate(0) : (setAskReason(true), rate(-1)))}><Icon d={DOWN} fill={story.rating === -1} /></button>
-        <button className={btn(story.bookmarked)} aria-pressed={story.bookmarked} aria-label="Bookmark" title="Save" onClick={() => run(() => api(`/api/stories/${story.id}/bookmark`, { method: 'POST', body: { on: !story.bookmarked } }), { bookmarked: !story.bookmarked })}><Icon d={MARK} fill={story.bookmarked} /></button>
-        <button className="btn btn-ghost !px-2" aria-label="Hide story" title="Hide" onClick={() => run(() => api(`/api/stories/${story.id}/hide`, { method: 'POST', body: { hidden: true } }), {}).then(() => onGone(story.id))}><Icon d={EYE_OFF} /></button>
-        <button className={`btn btn-ghost text-xs ${variant === 'brief' ? '!px-1.5 !py-1' : ''}`} onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
-        <span className="flex-1" />
-        <button className={`btn btn-ghost text-xs ${variant === 'brief' ? '!px-1.5 !py-1' : ''}`} onClick={toggleWhy} aria-expanded={why} aria-label="Why recommended?">{variant === 'brief' ? 'Why?' : 'Why recommended?'}</button>
-        {story.sourceCount + story.mutedSources > 1 && <button className={`btn btn-outline text-xs ${variant === 'brief' ? '!px-2 !py-0.5' : ''}`} onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : variant === 'brief' ? `Coverage (${story.sourceCount + story.mutedSources})` : `See coverage from ${story.sourceCount} ${story.sourceCount === 1 ? 'source' : 'sources'}${story.mutedSources > 0 ? ` (+${story.mutedSources} muted)` : ''}`}</button>}
-      </div>
+      {variant === 'brief' ? (
+        <div className="mt-2 flex items-center gap-0 border-t border-slate-100 pt-1.5 dark:border-slate-800">
+          <button className={btn(story.bookmarked)} aria-pressed={story.bookmarked} aria-label="Bookmark" title="Save" onClick={toggleBookmark}><Icon d={MARK} fill={story.bookmarked} /></button>
+          <button className="btn btn-ghost text-xs !px-1.5 !py-1" onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
+          <span className="flex-1" />
+          <ActionMenu label="More actions" items={menuItems} />
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2.5 dark:border-slate-800">
+          <button className={btn(story.rating === 1)} aria-pressed={story.rating === 1} aria-label="Thumbs up" title="More like this" onClick={thumbUp}><Icon d={UP} fill={story.rating === 1} /></button>
+          <button className={btn(story.rating === -1)} aria-pressed={story.rating === -1} aria-label="Thumbs down" title="Less like this" onClick={thumbDown}><Icon d={DOWN} fill={story.rating === -1} /></button>
+          <button className={btn(story.bookmarked)} aria-pressed={story.bookmarked} aria-label="Bookmark" title="Save" onClick={toggleBookmark}><Icon d={MARK} fill={story.bookmarked} /></button>
+          <button className="btn btn-ghost !px-2" aria-label="Hide story" title="Hide" onClick={() => void hide()}><Icon d={EYE_OFF} /></button>
+          <button className="btn btn-ghost text-xs" onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
+          <span className="flex-1" />
+          <button className="btn btn-ghost text-xs" onClick={toggleWhy} aria-expanded={why}>Why recommended?</button>
+          {coverageCount > 1 && <button className="btn btn-outline text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : `See coverage from ${story.sourceCount} ${story.sourceCount === 1 ? 'source' : 'sources'}${story.mutedSources > 0 ? ` (+${story.mutedSources} muted)` : ''}`}</button>}
+        </div>
+      )}
 
       {askReason && story.rating === -1 && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-50 p-2 text-sm dark:bg-slate-800/60" role="group" aria-label="Why thumbs down?">

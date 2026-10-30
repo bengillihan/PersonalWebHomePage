@@ -8,16 +8,16 @@ import type { GeoPrefs } from '../settings.js';
  *    in Settings -> Geography (and the AI category 'Local' / 'Regional' / 'Washington' when it says so).
  * A story may belong to several sections. Pure functions: no database, no network.
  */
-export const SECTIONS = ['local', 'regional', 'washington', 'us', 'world', 'business', 'technology', 'sports'] as const;
+export const SECTIONS = ['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports'] as const;
 export type Section = (typeof SECTIONS)[number];
 export const isSection = (s: string): s is Section => (SECTIONS as readonly string[]).includes(s);
-export const SECTION_LABEL: Record<Section, string> = { local: 'Local', regional: 'Regional', washington: 'Washington', us: 'U.S.', world: 'World', business: 'Business', technology: 'Technology', sports: 'Sports' };
+export const SECTION_LABEL: Record<Section, string> = { local: 'Local', regional: 'Regional', washington: 'Washington', us: 'U.S.', world: 'World', politics: 'Politics', business: 'Business', technology: 'Technology', sports: 'Sports' };
 /** How far a story from the user's closest places (e.g. Des Moines, Federal Way) is lifted within Local. */
 export const LOCAL_PRIORITY_BOOST = 0.5;
 
 const CATEGORY: Record<Section, string[]> = {
   local: [], regional: ['regional'], washington: ['washington', 'washington state'],
-  us: ['politics', 'u.s.', 'us', 'national'], world: ['world', 'international'],
+  us: ['politics', 'u.s.', 'us', 'national'], world: ['world', 'international'], politics: ['politics'],
   business: ['business', 'economy', 'finance', 'markets', 'energy', 'industry', 'companies'],
   technology: ['technology', 'tech', 'ai', 'cybersecurity', 'science & technology'], sports: ['sports'],
 };
@@ -25,8 +25,26 @@ const US_TERMS = ['Congress', 'White House', 'Supreme Court', 'Pentagon', 'U.S. 
 /** A following word that means the place name is somewhere else ("Des Moines, Iowa", "Kent State", "Des Moines Register"). */
 const ELSEWHERE = /^(?:,\s*)?(?:iowa|ia\b|england|ohio|kentucky|ky\b|michigan|maine|connecticut|ontario|texas|california|oregon|florida|illinois|virginia|georgia|state\b|university\b|register\b)/i;
 
+/**
+ * Politics by MAIN EVENT, not by who is named: Gemini's 'Politics' always counts; otherwise only a political EVENT in the HEADLINE does (an election,
+ * campaign, ballot, Congress, a bill or legislation, an executive order, a veto, government policy). A name alone never does, topical categories that are
+ * clearly something else (Business, Technology, Sports, ...) are never relabelled, and municipal council / mayor decisions stay Local news.
+ */
+const ELECTION = /\b(elections?|elected|campaigns?|campaigning|candidates?|ballots?|primar(?:y|ies)|caucus(?:es)?|runoffs?|midterms?|voters?|nominee|nomination|incumbent)\b/i;
+const GOVERNMENT = /\b(congress(?:ional)?|lawmakers?|legislat\w+|vetoe[sd]?|veto|executive orders?|white house|impeach\w*|filibuster|redistrict\w*|tariffs?|sanctions)\b/i;
+const GOVERNMENT_CS = /\b(?:the |U\.S\. )?Senate\b|\bHouse (?:Republicans|Democrats|vote|passes|Speaker)\b|\b(?:pass(?:es|ed)?|signs?|signed|vetoe[sd]?|advance[sd]?|clears?|approves?|backs?|kills?|stalls?) (?:the |a |new |that |its )?(?:\w+ ){0,2}bills?\b|\bbills? (?:passes|passed|would|signed|vetoed|clears|advances|stalls|dies|fails)\b|\b[Gg]overnor (?:signs|vetoes|proposes|orders)\b/; // case-sensitive: "Bill Gates" is a person, "bill" a law
+const NOT_POLITICAL_CATEGORY = new Set(['business', 'technology', 'tech', 'sports', 'entertainment', 'science', 'automotive', 'health', 'economy', 'finance', 'markets', 'energy', 'industry', 'companies']);
+export function isPolitical(title: string, category: string | null): boolean {
+  const cat = (category ?? '').trim().toLowerCase();
+  if (cat === 'politics') return true;
+  if (NOT_POLITICAL_CATEGORY.has(cat)) return false;
+  return ELECTION.test(title) || ((GOVERNMENT.test(title) || GOVERNMENT_CS.test(title)) && !/\b(sports?|game|season|playoffs?)\b/i.test(title));
+}
+
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const termRe = (t: string) => new RegExp(`(?<![\\p{L}\\p{N}])${esc(t.trim()).replace(/-/g, '[-\\s]?').replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'giu');
+const RE_CACHE = new Map<string, RegExp>();
+const termRe = (t: string) => { let r = RE_CACHE.get(t); if (!r) { r = build(t); RE_CACHE.set(t, r); } return r; };
+const build = (t: string) => new RegExp(`(?<![\\p{L}\\p{N}])${esc(t.trim()).replace(/-/g, '[-\\s]?').replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'giu');
 /** Does the text name any of these places (as whole words, and not as a namesake elsewhere)? */
 function mentions(text: string, terms: string[]): string | null {
   for (const t of terms) {
@@ -65,5 +83,6 @@ export function classify(s: SectionInput, geo: GeoPrefs): Classified {
   const national = !out.has('world') && !out.has('sports') && cat !== 'entertainment' && mentions(text, US_TERMS) !== null;
   if (out.has('us') && (local || regional || state) && !national) out.delete('us'); // "Politics" about the Seattle council is not national news
   if (national) out.add('us');
+  if (!out.has('politics') && isPolitical(s.title, s.category)) out.add('politics');
   return { sections: out, localPriority: out.has('local') && mentions(text, geo.localPriority) !== null };
 }

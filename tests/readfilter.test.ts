@@ -118,7 +118,7 @@ describe('pagination, counts and ranking are unaffected by the read filter', () 
   });
 });
 
-describe('read applies to the whole story; substantial new information makes it reappear as Updated', () => {
+describe('read applies to the whole story; only a material development makes it reappear as Updated', () => {
   const A = { title: 'Boeing strike ends after union approves new contract', link: 'https://alpha.example/1', desc: 'Boeing machinists voted to approve a new four-year contract, ending a strike that lasted several weeks.' };
   const B = { title: 'Union approves new contract, ending Boeing strike', link: 'https://beta.example/9', desc: 'Striking Boeing workers ratified a new contract on Wednesday, ending the walkout that started weeks ago.' };
   const items = (i: { title: string; link: string; desc: string }) => rss([{ ...i, date: new Date(Date.now() - 3_600_000) }]);
@@ -129,7 +129,7 @@ describe('read applies to the whole story; substantial new information makes it 
   }
   const mkSrc = (name: string, path: string) => Number(db.prepare("INSERT INTO sources (name, site_url, feed_url, kind, created_at) VALUES (?,?,?,'rss',0)").run(name, `${fx.url}/${name}`, fx.url + path).lastInsertRowid);
 
-  it('REGRESSION: read hides the whole multi-source story; new coverage resurfaces it with Updated; cosmetic edits do not; a material correction does', async () => {
+  it('REGRESSION: read hides the whole multi-source story; more coverage of the same facts keeps it hidden; cosmetic edits do too; a material correction reopens it', async () => {
     mkSrc('Alpha', '/rf-a'); fx.routes.set('/rf-a', { body: items(A) });
     await refresh();
     const cluster = (db.prepare('SELECT id FROM story_clusters').get() as any).id;
@@ -140,18 +140,16 @@ describe('read applies to the whole story; substantial new information makes it 
     mkSrc('Beta', '/rf-b'); fx.routes.set('/rf-b', { body: items(B) }); // a second publisher reports the same event
     await refresh();
     expect((db.prepare('SELECT article_count, source_count FROM story_clusters').get() as any)).toEqual({ article_count: 2, source_count: 2 }); // one story, both articles
-    const [back] = queryFeed(db, { tab: 'latest' }).items;
-    expect(back).toMatchObject({ id: cluster, isRead: true, isUpdated: true, sourceCount: 2 }); // reappears labelled Updated
-    expect(ids('unread')).toEqual([]); // still strictly "read" for the Unread tab
-
-    markRead(cluster); await sleep(5);
-    expect(ids('latest')).toEqual([]); // reading it again hides the whole story again
+    expect(ids('latest')).toEqual([]); // before: a second publisher reporting the same facts resurfaced it as "Updated"
+    expect(ids('unread')).toEqual([]); expect(queryFeed(db, { tab: 'saved' }).items).toEqual([]);
+    expect(queryFeed(db, { tab: 'latest', q: 'boeing' }).items[0]).toMatchObject({ id: cluster, isRead: true, isUpdated: false, sourceCount: 2 }); // the new source joined the story's coverage
 
     fx.routes.set('/rf-a', { body: items({ ...A, title: A.title.toUpperCase() + '!', desc: A.desc.toUpperCase() }) }); // cosmetic edit only
     await refresh(); expect(ids('latest')).toEqual([]);
 
     fx.routes.set('/rf-a', { body: items({ ...A, desc: 'Correction: the machinists approved the contract by a narrow 51 percent margin on Thursday, not Wednesday as first reported.' }) });
-    await refresh(); expect(queryFeed(db, { tab: 'latest' }).items[0]).toMatchObject({ id: cluster, isUpdated: true }); // substantive change resurfaces it
+    await refresh(); expect(queryFeed(db, { tab: 'latest' }).items[0]).toMatchObject({ id: cluster, isRead: true, isUpdated: true }); // substantive change resurfaces it, labelled Updated
+    markRead(cluster); await sleep(5); expect(ids('latest')).toEqual([]); // and reading it again hides it again, once
   });
 });
 
