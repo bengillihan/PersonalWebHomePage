@@ -18,6 +18,7 @@ export interface Config {
   geminiApiKey: string;
   geminiModel: string;
   aiDailyBudget: number;
+  aiPerMinute: number;
   marketProvider: string;
   twelveDataKey: string;
   twelveDataCreditsPerMinute: number;
@@ -49,6 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     geminiApiKey: env.GEMINI_API_KEY ?? '',
     geminiModel: env.GEMINI_MODEL ?? 'gemini-3.5-flash-lite',
     aiDailyBudget: Number(env.AI_DAILY_REQUEST_BUDGET ?? 200),
+    aiPerMinute: Number(env.AI_REQUESTS_PER_MINUTE ?? 12),
     marketProvider: env.MARKET_PROVIDER ?? 'twelvedata',
     twelveDataKey: env.TWELVEDATA_API_KEY ?? '',
     twelveDataCreditsPerMinute: Math.max(1, Math.floor(Number(env.TWELVEDATA_CREDITS_PER_MINUTE ?? 8)) || 8),

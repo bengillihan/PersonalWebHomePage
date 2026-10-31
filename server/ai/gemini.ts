@@ -69,7 +69,20 @@ const fence = (s: string | null | undefined, max: number) => (s ?? '').replace(/
  */
 export class Ai {
   private backoffUntil = 0;
-  constructor(private db: DB, private model: string, private transport: AiTransport | null, private envBudget: number, private clock: () => number = Date.now) {}
+  /** Start times (real ms, including slots promised to callers still waiting) of requests in the last minute. */
+  private slots: number[] = [];
+  /** `perMinute` stays under the provider's per-minute limit (15 on the free tier) so a refresh burst waits instead of being rejected. 0 disables pacing. */
+  constructor(private db: DB, private model: string, private transport: AiTransport | null, private envBudget: number, private clock: () => number = Date.now, private perMinute = 12) {}
+
+  /** Synchronously claims the next send slot in a rolling 60s window and returns how long to wait for it. Claims happen before any await, so concurrent callers queue in order. */
+  private claimSlot(): number {
+    if (this.perMinute <= 0) return 0;
+    const now = Date.now();
+    this.slots = this.slots.filter((t) => t > now - 60_000);
+    const at = this.slots.length < this.perMinute ? now : this.slots[this.slots.length - this.perMinute] + 60_000;
+    this.slots.push(at); this.slots.sort((a, b) => a - b);
+    return Math.max(0, at - now);
+  }
 
   get enabled(): boolean { return this.transport !== null; }
 
@@ -111,7 +124,10 @@ export class Ai {
   }
 
   private async call<T>(task: string, call: JsonCall, schema: z.ZodType<T>): Promise<T | null> {
-    const day = this.reserve(); // before anything is sent
+    if (!this.canCall()) return null; // don't hold a pacing slot for a request that cannot be sent
+    const wait = this.claimSlot();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    const day = this.reserve(); // before anything is sent (re-checks budget and backoff after the wait)
     if (!day) return null;
     let settled = false; const end = (ok: boolean, inT = 0, outT = 0) => { if (!settled) { settled = true; this.settle(day, ok, inT, outT); } };
     try {

@@ -40,7 +40,7 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
 
   const transport = o.transport !== undefined ? o.transport : cfg.geminiApiKey ? createGeminiTransport(cfg.geminiApiKey, cfg.geminiModel) : null;
-  const ai = new Ai(db, cfg.geminiModel, transport, cfg.aiDailyBudget);
+  const ai = new Ai(db, cfg.geminiModel, transport, cfg.aiDailyBudget, Date.now, cfg.aiPerMinute);
   const provider = o.provider ?? createTwelveData(cfg.twelveDataKey, undefined, {}, new CreditLimiter(db, cfg.twelveDataCreditsPerMinute));
   const market = new MarketService(db, provider);
   const refresher = new Refresher({ db, ai, log: app.log as any, fetchOpts: o.fetchOpts });
