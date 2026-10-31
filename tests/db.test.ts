@@ -20,7 +20,7 @@ describe('SQLite', () => {
     expect(migrate(db)).toEqual([]); // nothing re-applied
     seedDefaults(db); setSetting(db, 'k', { a: 1 }); db.close();
     db = openDb(file);
-    expect(getSetting(db, 'k', null)).toEqual({ a: 1 }); expect((db.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(7);
+    expect(getSetting(db, 'k', null)).toEqual({ a: 1 }); expect((db.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(10);
     expect((db.prepare('SELECT COUNT(*) n FROM schema_migrations').get() as any).n).toBe(MIGRATIONS.length);
     db.close(); fs.rmSync(dir, { recursive: true });
   });

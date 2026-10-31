@@ -5,7 +5,7 @@ import { recomputeCluster } from '../server/news/cluster.js';
 import { queryFeed, queryFrontPage, FRONT } from '../server/news/query.js';
 import { classify, SECTIONS } from '../server/news/sections.js';
 import { SEED_SOURCES } from '../server/seed.js';
-import { DEFAULT_GEO, getPrefs, saveGeo, savePrefs } from '../server/settings.js';
+import { DEFAULT_GEO, getFrontMix, getGeo, getPrefs, saveGeo, savePrefs } from '../server/settings.js';
 import { setSetting } from '../server/db.js';
 import { reindexBlocks } from '../server/news/blocking.js';
 import { buildApp } from '../server/app.js';
@@ -28,12 +28,12 @@ const has = (title: string, category: string | null = null, summary: string | nu
 beforeEach(() => { db = memDb(); });
 
 describe('classification: sections follow what a story is about', () => {
-  it('Local, Regional and Washington are separate, and a story may qualify for several', () => {
+  it('Local and Washington (which includes Greater Seattle) are separate, and a story may qualify for both', () => {
     expect([...has('Des Moines council approves marina plan')]).toEqual(['local']);
-    expect([...has('Seattle council approves transit levy')]).toEqual(['regional']);
+    expect([...has('Seattle council approves transit levy')]).toEqual(['washington']);
     expect([...has('Olympia lawmakers debate new state tax')].sort()).toEqual(['politics', 'washington']);
     expect([...has('Federal Way schools to get state funding as Olympia passes budget')].sort()).toEqual(['local', 'washington']);
-    expect([...has('Kent warehouse fire closes Highway 167 in King County')].sort()).toEqual(['local', 'regional']);
+    expect([...has('Kent warehouse fire closes Highway 167 in King County')].sort()).toEqual(['local', 'washington']);
   });
   it('REGRESSION: the publisher\'s location does not decide the section (a local source\'s national story is not Local)', () => {
     const local = src('Hometown Gazette', { local: true }); const c = story(local, 'Senate passes federal budget bill', { ai: 'Politics' });
@@ -50,23 +50,62 @@ describe('classification: sections follow what a story is about', () => {
     expect(has('Elections held across the region', 'World').has('world')).toBe(true);
     expect(has('Election results in Paris', 'World', 'The White House said it was watching.').has('us')).toBe(false); // a world story that mentions Washington stays World
   });
-  it('REGRESSION: Gemini only returns Local / Politics / Sports (never "U.S." or "Regional"), so the places in the text refine them', () => {
-    expect([...has('Bellevue light rail extension opens', 'Local')]).toEqual(['regional']); // "Local" but a Seattle-area place: Regional, not Local
+  it('REGRESSION: Gemini only returns Local / Politics / Sports (never "U.S." or "Washington"), so the places in the text refine them', () => {
+    expect([...has('Bellevue light rail extension opens', 'Local')]).toEqual(['washington']); // "Local" but a Seattle-area place: Washington, not Local
     expect([...has('Kent School District adopts new calendar', 'Local')]).toEqual(['local']);
     expect([...has('Library hours extended for summer', 'Local', null, true)]).toEqual(['local']); // no place named, but a local publisher: "Local" stands
     expect([...has('Des Moines, Iowa school board closes two schools', 'Local')]).toEqual([]); // Gemini says "Local" for any town: not enough on its own
     expect([...has('Library hours extended for summer', 'Local')]).toEqual([]);
-    expect([...has('Seattle council approves transit levy', 'Politics')].sort()).toEqual(['politics', 'regional']); // local politics is not U.S. news
+    expect([...has('Seattle council approves transit levy', 'Politics')].sort()).toEqual(['politics', 'washington']); // local politics is not U.S. news
     expect([...has('Olympia lawmakers advance new tax bill', 'Politics')].sort()).toEqual(['politics', 'washington']);
     expect([...has('State Senate passes housing bill in Olympia', 'Politics')].sort()).toEqual(['politics', 'washington']); // a state Senate is not "the Senate"
     expect([...has('Senate passes federal budget deal', 'Politics')].sort()).toEqual(['politics', 'us']);
-    expect([...has('Seattle delegation urges Congress to fund the airport', 'Politics')].sort()).toEqual(['politics', 'regional', 'us']);
+    expect([...has('Seattle delegation urges Congress to fund the airport', 'Politics')].sort()).toEqual(['politics', 'us', 'washington']);
   });
   it('REGRESSION: sports and entertainment stay in their own sections even when they name a local place', () => {
     expect([...has('Seattle edges San Francisco in overtime', 'Sports')]).toEqual(['sports']);
     expect([...has('Des Moines theater festival returns', 'Entertainment')]).toEqual([]);
   });
-  it('every section key is routable', () => { expect(SECTIONS).toEqual(['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors']); });
+  it('every section key is routable', () => { expect(SECTIONS).toEqual(['local', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors', 'theology']); });
+});
+
+describe('Washington now includes the Greater Seattle area', () => {
+  it('has one geography list; a list saved while Regional existed is folded into it once, keeping the user\'s edits', () => {
+    expect(DEFAULT_GEO).not.toHaveProperty('regional'); expect(DEFAULT_GEO.washington).toEqual(expect.arrayContaining(['Seattle', 'Puget Sound', 'Olympia']));
+    setSetting(db, 'geo', { local: ['Kent'], localPriority: ['Kent'], regional: ['Seattle', 'Fife'], washington: ['Olympia', 'Spokane'] });
+    expect(getGeo(db)).toEqual({ local: ['Kent'], localPriority: ['Kent'], washington: ['Olympia', 'Spokane', 'Seattle', 'Fife'] });
+    expect(JSON.parse((db.prepare("SELECT value FROM application_settings WHERE key = 'geo'").get() as any).value)).not.toHaveProperty('regional'); // rewritten once
+    saveGeo(db, { ...getGeo(db), washington: ['Olympia'] }); expect(getGeo(db).washington).toEqual(['Olympia']); // a later edit sticks: nothing comes back
+    const s = src('General'); const c = story(s, 'Fife school board votes on levy'); expect(ids('washington')).toEqual([]); saveGeo(db, { ...getGeo(db), washington: ['Fife'] }); expect(ids('washington')).toEqual([c]);
+  });
+  it('a saved Front Page Mix keeps its Washington weight and ignores the old Regional one', () => {
+    setSetting(db, 'front_mix', { weights: { regional: 5, washington: 1, local: 3 }, majorException: true, majorThreshold: 0.8 });
+    const m = getFrontMix(db); expect(m.weights).not.toHaveProperty('regional'); expect(m.weights).toMatchObject({ washington: 1, local: 3, theology: 2 });
+  });
+});
+
+describe('Theology section', () => {
+  it('takes religion and Christianity stories by category or headline, and leaves look-alikes alone', () => {
+    expect(has('Council approves budget', 'Religion').has('theology')).toBe(true);
+    for (const t of ['Pope Leo meets bishops at the Vatican', 'Pastor resigns after sermon controversy', 'Southern Baptist leaders vote on women pastors', 'What the Bible says about money', 'Evangelical colleges report enrollment shift', 'New Catholic church opens in Kent', 'Archbishop calls for prayer after floods', 'Christians gather for Easter Sunday worship'])
+      expect(has(t, 'Other').has('theology') && has(t, null).has('theology'), t).toBe(true);
+    for (const t of ['Kent church fire displaces families']) expect(has(t, 'Local').has('theology'), t).toBe(true); // a church story is Local and Theology
+    for (const t of ['Mariners sign Christian Walker', 'Bishop scores twice in win', 'Church scores 22 in overtime']) expect(has(t, 'Sports').has('theology'), t).toBe(false);
+    expect(has('Christian Bale joins new film', 'Entertainment').has('theology')).toBe(false);
+    expect(has('Church & Dwight shares rise', 'Business').has('theology')).toBe(false);
+    expect(has('Church Street garage lands funding', null).has('theology')).toBe(true); // weak word, no category: accepted rather than missed
+    expect(has('Ministry of Finance cuts rates', 'World').has('theology')).toBe(false); expect(has('Christianity Today names editor', 'Business').has('theology')).toBe(true);
+  });
+  it('has its own section feed, Front Page block and Front Page Mix weight, and Gemini can file under Religion', () => {
+    const s = src('General');
+    const rel = story(s, 'Churches across Washington open doors for Easter Sunday', { ai: 'Religion' }), other = story(s, 'Seahawks edge 49ers', { ai: 'Sports' });
+    expect(ids('theology')).toEqual([rel]); expect(ids('sports')).toEqual([other]);
+    for (let i = 0; i < 7; i++) story(s, `Pastor ${i} reflects on a decade of sermons`, { ai: 'Religion', ageMin: 10 + i });
+    const block = queryFrontPage(db).sections.find((x) => x.key === 'theology'); expect(block!.label).toBe('Theology'); expect(block!.items.length).toBeGreaterThan(0);
+  });
+  it('seeds Religion News Service, Christianity Today and The Gospel Coalition', () => {
+    expect(SEED_SOURCES.filter((x) => x.categories.includes('Religion')).map((x) => x.name).sort()).toEqual(['Christianity Today', 'Religion News Service', 'The Gospel Coalition']);
+  });
 });
 
 describe('Outdoors section', () => {
@@ -97,7 +136,7 @@ describe('section feeds', () => {
     const s = src('General');
     const both = story(s, 'Federal Way schools get state funding as Olympia passes budget', { ageMin: 30 }), seattle = story(s, 'Seattle council approves transit levy', { ageMin: 20 });
     const biz = story(s, 'Chipmaker shares jump', { ai: 'Business', ageMin: 10 }), tech = story(s, 'New open-source model released', { ai: 'Technology', ageMin: 10 });
-    expect(ids('local')).toEqual([both]); expect(ids('regional')).toEqual([seattle]); expect(ids('washington')).toEqual([both]);
+    expect(ids('local')).toEqual([both]); expect(ids('washington').sort()).toEqual([both, seattle].sort());
     expect(ids('business')).toEqual([biz]); expect(ids('technology')).toEqual([tech]); expect(ids('world')).toEqual([]);
   });
   it('Des Moines and Federal Way stories outrank other Local stories, even older or less important ones', () => {
@@ -109,8 +148,8 @@ describe('section feeds', () => {
   it('geography is editable: changing the lists changes the sections immediately, with nothing re-fetched', () => {
     const s = src('General'); const c = story(s, 'Normandy Park bluff trail reopens');
     expect(ids('local')).toEqual([c]);
-    saveGeo(db, { ...DEFAULT_GEO, local: DEFAULT_GEO.local.filter((x) => x !== 'Normandy Park'), regional: [...DEFAULT_GEO.regional, 'Normandy Park'] });
-    expect(ids('local')).toEqual([]); expect(ids('regional')).toEqual([c]);
+    saveGeo(db, { ...DEFAULT_GEO, local: DEFAULT_GEO.local.filter((x) => x !== 'Normandy Park'), washington: [...DEFAULT_GEO.washington, 'Normandy Park'] });
+    expect(ids('local')).toEqual([]); expect(ids('washington')).toEqual([c]);
   });
   it('REGRESSION: blocked subjects (Hockey / NHL), muted publishers and read stories are excluded from every section, as in the other feeds', () => {
     const s = src('General'), loud = src('Loud Blog');

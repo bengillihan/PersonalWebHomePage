@@ -217,9 +217,9 @@ function Saved() {
 
 /* ---------------- Front Page Mix ---------------- */
 const MIX_FIELDS: [keyof FrontMix['weights'], string, string][] = [
-  ['local', 'Local', 'Des Moines, Federal Way, SeaTac, Kent, Burien and South King County'], ['regional', 'Regional', 'Greater Seattle and the Puget Sound area'], ['washington', 'Washington', 'Statewide news and Olympia'],
+  ['local', 'Local', 'Des Moines, Federal Way, SeaTac, Kent, Burien and South King County'], ['washington', 'Washington', 'Statewide news, Olympia, Greater Seattle and the Puget Sound area'],
   ['us', 'U.S.', 'National news'], ['world', 'World', 'International news'], ['politics', 'Politics', 'Elections, Congress, legislation and government policy'],
-  ['business', 'Business', 'Markets, the economy, companies and energy'], ['technology', 'Technology', 'AI, cybersecurity, software and hardware'], ['sports', 'Sports', 'Sports coverage (blocked subjects stay blocked)'], ['outdoors', 'Outdoors', 'Hiking, backpacking, camping, climbing and other outdoor recreation'], ['other', 'Other', 'Health, science, automotive and everything else ("More stories")'],
+  ['business', 'Business', 'Markets, the economy, companies and energy'], ['technology', 'Technology', 'AI, cybersecurity, software and hardware'], ['sports', 'Sports', 'Sports coverage (blocked subjects stay blocked)'], ['outdoors', 'Outdoors', 'Hiking, backpacking, camping, climbing and other outdoor recreation'], ['theology', 'Theology', 'Religion and Christianity: churches, theology, the Bible and faith news'], ['other', 'Other', 'Health, science, automotive and everything else ("More stories")'],
 ];
 function FrontMixPanel({ onChanged }: { onChanged: () => void }) {
   const { data, reload } = useLoad<{ mix: FrontMix; defaults: FrontMix }>('/api/front-mix');
@@ -262,8 +262,7 @@ function FrontMixPanel({ onChanged }: { onChanged: () => void }) {
 const GEO_FIELDS: [keyof GeoPrefs, string, string][] = [
   ['local', 'Local', 'Your closest communities (e.g. Des Moines, Federal Way, SeaTac, Kent, Burien, Normandy Park and South King County).'],
   ['localPriority', 'Local priority', 'Places inside Local whose stories are lifted to the top of the Local section.'],
-  ['regional', 'Regional', 'Greater Seattle and the Puget Sound area: Bellevue, Tacoma, Everett and King, Pierce and Snohomish counties.'],
-  ['washington', 'Washington', 'Statewide news: Olympia, the legislature, state government, taxes and major projects across the state.'],
+  ['washington', 'Washington', 'The whole state: Olympia and state government, plus Greater Seattle and the Puget Sound area (Seattle, Bellevue, Tacoma, Everett, King, Pierce and Snohomish counties).'],
 ];
 function Geography({ onChanged }: { onChanged: () => void }) {
   const { data, reload } = useLoad<{ geo: GeoPrefs; defaults: GeoPrefs }>('/api/geo');

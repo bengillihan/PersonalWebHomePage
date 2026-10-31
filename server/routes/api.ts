@@ -86,7 +86,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     saveFrontMix(db, body); return { mix: getFrontMix(db), defaults: DEFAULT_FRONT_MIX };
   });
   app.get('/api/geo', async () => ({ geo: getGeo(db), defaults: DEFAULT_GEO }));
-  app.put('/api/geo', async (req) => { const list = z.array(z.string().trim().min(1).max(60)).max(100); saveGeo(db, z.object({ local: list, localPriority: list, regional: list, washington: list }).parse(req.body)); return { geo: getGeo(db), defaults: DEFAULT_GEO }; });
+  app.put('/api/geo', async (req) => { const list = z.array(z.string().trim().min(1).max(60)).max(100); saveGeo(db, z.object({ local: list, localPriority: list, washington: list }).parse(req.body)); return { geo: getGeo(db), defaults: DEFAULT_GEO }; });
   app.post('/api/refresh', heavy, async (_req, reply) => { void refresher.trigger('manual').catch(() => {}); void market.refreshIfNeeded(true).catch(() => {}); return reply.code(202).send(status()); });
 
   app.get('/api/stories/:id/why', async (req, reply) => { const { id } = idParam.parse(req.params); const w = explainStory(db, id); return w ?? reply.code(404).send({ error: 'not_found' }); });

@@ -150,10 +150,10 @@ export const FRONT = { secondary: 6, secondaryPerCategory: 2, quota: [0, 1, 2, 3
 /**
  * A story that belongs to several categories is placed under ONE, the most specific (this order), whatever the weights are. If that category is
  * switched off (weight 0) the story is left off the Front Page: it is never handed to another category with a higher weight, so a weight of 0 can
- * never make a story more prominent. Municipal and local-infrastructure stories are placed by their place (Local/Regional/Washington) before
+ * never make a story more prominent. Municipal and local-infrastructure stories are placed by their place (Local/Washington) before
  * Politics, and Business/Technology stories keep their topic even when they mention legislation (Politics needs a political main event).
  */
-const PRIMARY_ORDER: FrontKey[] = ['local', 'regional', 'washington', 'politics', 'business', 'technology', 'outdoors', 'sports', 'us', 'world', 'other'];
+const PRIMARY_ORDER: FrontKey[] = ['local', 'washington', 'politics', 'business', 'technology', 'outdoors', 'theology', 'sports', 'us', 'world', 'other'];
 const FRONT_LABEL = (k: FrontKey) => (k === 'other' ? 'More stories' : SECTION_LABEL[k]);
 
 /**

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import Settings from '../../web/src/components/Settings';
 
-const DEFAULTS = { weights: { local: 5, regional: 4, washington: 3, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, other: 2 }, majorException: true, majorThreshold: 0.8 };
+const DEFAULTS = { weights: { local: 5, washington: 4, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, theology: 2, other: 2 }, majorException: true, majorThreshold: 0.8 };
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } });
 let puts: any[]; let stored: typeof DEFAULTS;
 beforeEach(() => {
@@ -21,7 +21,7 @@ const slider = (name: string) => screen.getByRole('slider', { name }) as HTMLInp
 describe('Settings → Front Page Mix', () => {
   it('lists every category as a 0-5 slider starting at the defaults, and is reachable from the Settings menu', async () => {
     mount(); await screen.findByRole('slider', { name: 'Local' });
-    expect(screen.getAllByRole('slider').map((s) => (s as HTMLInputElement).value)).toEqual(['5', '4', '3', '4', '4', '2', '5', '5', '2', '3', '2']);
+    expect(screen.getAllByRole('slider').map((s) => (s as HTMLInputElement).value)).toEqual(['5', '4', '4', '4', '2', '5', '5', '2', '3', '2', '2']);
     expect(screen.getAllByRole('slider').map((s) => [s.getAttribute('min'), s.getAttribute('max')])[0]).toEqual(['0', '5']);
     expect(screen.getByRole('button', { name: 'Front Page Mix' })).toBeTruthy();
   });

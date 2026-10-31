@@ -60,7 +60,7 @@ describe('Politics classification', () => {
 
 describe('Front Page Mix', () => {
   it('has the suggested defaults and keeps them when nothing is saved', () => {
-    expect(getFrontMix(db)).toEqual({ weights: { local: 5, regional: 4, washington: 3, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, other: 2 }, majorException: true, majorThreshold: 0.8 });
+    expect(getFrontMix(db)).toEqual({ weights: { local: 5, washington: 4, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, theology: 2, other: 2 }, majorException: true, majorThreshold: 0.8 });
   });
   it('REGRESSION: weight 0 removes a category from the Front Page only; its section, Search and Saved still have it', () => {
     const s = src('General'); const sp = story(s, 'Seahawks edge 49ers in overtime', { ai: 'Sports' }), bz = story(s, 'Chipmaker shares jump', { ai: 'Business' });

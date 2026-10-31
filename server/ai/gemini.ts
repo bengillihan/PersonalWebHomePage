@@ -7,7 +7,7 @@ import { sha256 } from '../news/normalize.js';
 export const PROMPT_VERSION = 'v1';
 /** Minimum excerpt length for an article to count as usable source text for a consolidated multi-source summary. */
 export const MIN_CLUSTER_EXCERPT = 80;
-export const BASE_CATEGORIES = ['Local', 'World', 'Business', 'Politics', 'Technology', 'Science', 'Health', 'Sports', 'Outdoors', 'Entertainment', 'Automotive', 'Other'];
+export const BASE_CATEGORIES = ['Local', 'World', 'Business', 'Politics', 'Technology', 'Science', 'Health', 'Sports', 'Outdoors', 'Religion', 'Entertainment', 'Automotive', 'Other'];
 
 /** Rough list prices (USD per 1M tokens) used ONLY for the usage estimate shown in Diagnostics. Adjust in settings key ai_price. */
 export const DEFAULT_PRICE = { inputPerM: 0.1, outputPerM: 0.4 };
@@ -173,7 +173,7 @@ export class Ai {
     }
     for (let i = 0; i < todo.length; i += batchSize) {
       const batch = todo.slice(i, i + batchSize);
-      const prompt = `Allowed categories: ${categories.join(', ')}.\nFor each article return id, category (one allowed value), importance and summary. "Outdoors" is for hiking, backpacking, camping, climbing, trail running, paddling, national parks and other outdoor recreation; team and league sports stay "Sports".\n\n` +
+      const prompt = `Allowed categories: ${categories.join(', ')}.\nFor each article return id, category (one allowed value), importance and summary. "Outdoors" is for hiking, backpacking, camping, climbing, trail running, paddling, national parks and other outdoor recreation; team and league sports stay "Sports". "Religion" is for religion, Christianity, churches, denominations, theology and the Bible.\n\n` +
         batch.map((a) => `<article id="${a.id}" publisher="${fence(a.publisher, 80)}">\nTitle: ${fence(a.title, 300)}\nExcerpt: ${fence(a.excerpt, 700) || '(none)'}\n${a.sourceHints?.length ? `Publisher sections (weak hint): ${a.sourceHints.map((h) => fence(h, 40)).join(', ')}\n` : ''}</article>`).join('\n');
       const res = await this.call('article', { system: SYSTEM, prompt, schema: jsonSchemas.analysis }, analysisSchema);
       if (!res) break; // budget/quota/invalid: stop spending; remaining get fallbacks

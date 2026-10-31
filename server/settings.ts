@@ -38,22 +38,26 @@ export function getPrefs(db: DB): Prefs {
 export function savePrefs(db: DB, prefs: Prefs): void { setSetting(db, 'prefs', prefs); }
 
 /**
- * Where "Local", "Regional" and "Washington" stories are found. Matched against a story's own headline and summary (never the publisher's
+ * Where "Local" and "Washington" stories are found ("Washington" covers the whole state, Greater Seattle and Puget Sound included). Matched against a story's own headline and summary (never the publisher's
  * location), so a story can qualify for several of them. Every list is editable in Settings -> Geography.
  */
 export interface GeoPrefs {
-  local: string[]; localPriority: string[]; regional: string[]; washington: string[];
+  local: string[]; localPriority: string[]; washington: string[];
 }
 export const DEFAULT_GEO: GeoPrefs = {
   local: ['Des Moines', 'Federal Way', 'SeaTac', 'Sea-Tac', 'Kent', 'Burien', 'Normandy Park', 'South King County', 'Tukwila', 'Renton', 'Covington', 'Maple Valley', 'Highline', 'Auburn, WA', 'Redondo', 'Midway'],
   localPriority: ['Des Moines', 'Federal Way'],
-  regional: ['Seattle', 'Bellevue', 'Tacoma', 'Everett', 'Puget Sound', 'King County', 'Pierce County', 'Snohomish County', 'Redmond', 'Kirkland', 'Bothell', 'Issaquah', 'Sound Transit', 'Port of Seattle', 'Sea-Tac Airport'],
-  washington: ['Washington state', 'Washington State Legislature', 'Olympia', 'state legislature', 'state lawmakers', 'WSDOT', 'Spokane', 'Yakima', 'Bellingham', 'Wenatchee', 'Tri-Cities', 'Washington Supreme Court', 'Washington governor', 'Evergreen State'],
+  washington: ['Washington state', 'Seattle', 'Bellevue', 'Tacoma', 'Everett', 'Puget Sound', 'King County', 'Pierce County', 'Snohomish County', 'Redmond', 'Kirkland', 'Bothell', 'Issaquah', 'Sound Transit', 'Port of Seattle', 'Sea-Tac Airport', 'Washington State Legislature', 'Olympia', 'state legislature', 'state lawmakers', 'WSDOT', 'Spokane', 'Yakima', 'Bellingham', 'Wenatchee', 'Tri-Cities', 'Washington Supreme Court', 'Washington governor', 'Evergreen State'],
 };
 const cleanList = (xs: unknown, fallback: string[]) => (Array.isArray(xs) ? [...new Set(xs.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean))].slice(0, 100) : fallback);
 export function getGeo(db: DB): GeoPrefs {
-  const s = getSetting<Partial<GeoPrefs>>(db, 'geo', {});
-  return { local: cleanList(s.local, DEFAULT_GEO.local), localPriority: cleanList(s.localPriority, DEFAULT_GEO.localPriority), regional: cleanList(s.regional, DEFAULT_GEO.regional), washington: cleanList(s.washington, DEFAULT_GEO.washington) };
+  const s = getSetting<Partial<GeoPrefs> & { regional?: string[] }>(db, 'geo', {});
+  let washington = cleanList(s.washington, DEFAULT_GEO.washington);
+  if (s.regional !== undefined) { // a saved list from when Regional was its own section: fold it into Washington once, then forget it
+    washington = cleanList([...washington, ...cleanList(s.regional, [])], []);
+    setSetting(db, 'geo', { local: cleanList(s.local, DEFAULT_GEO.local), localPriority: cleanList(s.localPriority, DEFAULT_GEO.localPriority), washington });
+  }
+  return { local: cleanList(s.local, DEFAULT_GEO.local), localPriority: cleanList(s.localPriority, DEFAULT_GEO.localPriority), washington };
 }
 export function saveGeo(db: DB, geo: GeoPrefs): void { setSetting(db, 'geo', geo); }
 
@@ -61,11 +65,11 @@ export function saveGeo(db: DB, geo: GeoPrefs): void { setSetting(db, 'geo', geo
  * Front Page Mix: how much each category matters on the FRONT PAGE only (0 = leave it off the Front Page; its own section, Search and Saved are
  * unaffected). Separate from article-interest weights and Show more / Show less. Stored in SQLite so it follows the account across devices.
  */
-export const FRONT_KEYS = ['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors', 'other'] as const;
+export const FRONT_KEYS = ['local', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors', 'theology', 'other'] as const;
 export type FrontKey = (typeof FRONT_KEYS)[number];
 export interface FrontMix { weights: Record<FrontKey, number>; majorException: boolean; majorThreshold: number }
 export const DEFAULT_FRONT_MIX: FrontMix = {
-  weights: { local: 5, regional: 4, washington: 3, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, other: 2 },
+  weights: { local: 5, washington: 4, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, theology: 2, other: 2 },
   majorException: true, majorThreshold: 0.8,
 };
 export function getFrontMix(db: DB): FrontMix {
