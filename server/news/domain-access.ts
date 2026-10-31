@@ -6,9 +6,9 @@ import type { Access } from './access.js';
  * Automatic paywall detection, once per publisher DOMAIN (never per article, never with Gemini). A few recent article pages of a domain are fetched
  * (the same safe fetcher the feeds use) and read for what the publisher itself declares:
  *  - schema.org `isAccessibleForFree: false` in the page's structured data (what Google asks paywalled publishers to mark) -> paywalled;
- *  - paywall markup in the page itself (a paywall class/id/attribute, Leaky Paywall) -> metered. A vendor's script alone is NOT evidence (BBC loads Zephr and is free);
+ *  - ACTIVE paywall markup in the page itself (a paywall class/id, a data-paywall attribute that is not "false", Leaky Paywall) -> metered. A vendor's script alone is NOT evidence (BBC loads Zephr and is free);
  *  - HTTP 402 -> paywalled; blocked or failed requests (401/403/429, errors) -> no evidence, never "free";
- *  - a page that loads with none of those -> free.
+ *  - a page with readable article text (several paragraphs) and none of those -> free; a login, bot-check or empty page says nothing -> unknown.
  * It is an ESTIMATE (a paywall counted in the browser by JavaScript cannot be seen from a plain fetch), so it ranks below the article's own feed metadata and
  * below the access the user set on a source, and it is labelled "Likely ...". Results are stored in domain_access and rechecked rarely.
  */
@@ -30,10 +30,30 @@ function walk(node: unknown, hit: (o: Record<string, unknown>) => boolean, depth
   const o = node as Record<string, unknown>;
   return hit(o) || Object.values(o).some((v) => walk(v, hit, depth + 1));
 }
-// Only markup that is itself a paywall. A vendor's script alone proves nothing (BBC loads Zephr and is free; Piano/Tinypass also run newsletter prompts), so vendors are not evidence.
-const VENDOR = /(leaky[_-]?paywall|\bdata-paywall\b|class=["'][^"']*\bpaywall(?:ed)?\b|id=["']paywall|["']paywall["']\s*:\s*(?:true|\{))/i;
+const OFF = new Set(['false', '0', 'off', 'no', 'none', 'null', 'inactive', 'disabled', 'hidden']);
+/**
+ * Paywall markup that is ACTIVE. Only markup that is itself a paywall counts (a vendor's script alone proves nothing: BBC loads Zephr and is free; Piano and
+ * Tinypass also run newsletter prompts), and an attribute is read by its VALUE: data-paywall="false" is a page saying it has no paywall.
+ */
+function activePaywallMarkup(html: string): string | null {
+  for (const tag of html.matchAll(/<[a-z][^<>]*>/gi)) {
+    const t = tag[0];
+    const attr = /\bdata-paywall(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/i.exec(t);
+    if (attr && !OFF.has((attr[1] ?? attr[2] ?? attr[3] ?? '').trim().toLowerCase())) return 'data-paywall attribute';
+    const cls = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(t); const tokens = (cls?.[1] ?? cls?.[2] ?? '').toLowerCase().split(/\s+/);
+    if (tokens.some((x) => /^(?:is-)?paywall(?:ed)?$/.test(x) || x === 'leaky_paywall' || x === 'leaky-paywall')) return 'paywall class';
+    if (/\bid\s*=\s*["']paywall["']/i.test(t)) return 'paywall element';
+  }
+  return /["']paywall["']\s*:\s*true\b/i.test(html) || /leaky[_-]?paywall/i.test(html) ? 'paywall setting' : null;
+}
 
-/** What one article page declares. `null` = the page said nothing usable (blocked, error, not HTML): no evidence either way. */
+const GATE = /(verify (?:that )?you are (?:a )?human|are you a (?:robot|human)|checking your browser|just a moment\.\.\.|enable javascript and cookies|captcha|access denied|unusual traffic|sign in to continue|log ?in to continue|please (?:sign|log) ?in|sign in or create an account|create a free account to continue)/i;
+const visibleText = (html: string) => html.replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+/** Characters of real paragraph text (paragraphs of 40+ characters): what "the article is readable" has to rest on. */
+const articleText = (html: string) => [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)].map((m) => visibleText(m[1])).filter((x) => x.length >= 40).reduce((n, x) => n + x.length, 0);
+export const MIN_ARTICLE_TEXT = 600;
+
+/** What one article page declares. `null` = the page said nothing usable (blocked, a login or bot-check page, no article text, not HTML): no evidence either way. */
 export function readPage(status: number, html: string): PageVerdict | null {
   if (status === 402) return { level: 'paywalled', evidence: 'HTTP 402 Payment Required' };
   if (status >= 400) return null;
@@ -42,9 +62,12 @@ export function readPage(status: number, html: string): PageVerdict | null {
     if (walk(json, (o) => falsy(o.isAccessibleForFree))) return { level: 'paywalled', evidence: 'Page marks itself isAccessibleForFree = false' };
   }
   if (/itemprop=["']isAccessibleForFree["'][^>]*content=["']false["']|content=["']false["'][^>]*itemprop=["']isAccessibleForFree["']/i.test(html)) return { level: 'paywalled', evidence: 'Page marks itself isAccessibleForFree = false' };
-  const v = VENDOR.exec(html); if (v) return { level: 'metered', evidence: `Paywall markup found (${v[1].slice(0, 30)})` };
   if (!/<(html|body|article|p)\b/i.test(html)) return null; // not an HTML page
-  return { level: 'free', evidence: 'Page loads with no paywall markers' };
+  const text = visibleText(html);
+  if (text.length < 4000 && GATE.test(text)) return null; // a sign-in or bot-check page answers 200 but says nothing about the articles
+  const m = activePaywallMarkup(html); if (m) return { level: 'metered', evidence: `Active paywall markup found (${m})` };
+  if (articleText(html) < MIN_ARTICLE_TEXT) return null; // "free" needs evidence that article text is actually readable, not just the absence of markers
+  return { level: 'free', evidence: 'Article text is readable and the page has no paywall markers' };
 }
 
 /** Combines the pages of one domain: any declared paywall wins, then metering, then free; no readable page at all = unknown. */

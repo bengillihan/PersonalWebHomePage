@@ -96,6 +96,14 @@ describe('Theology section', () => {
     expect(has('Church Street garage lands funding', null).has('theology')).toBe(true); // weak word, no category: accepted rather than missed
     expect(has('Ministry of Finance cuts rates', 'World').has('theology')).toBe(false); expect(has('Christianity Today names editor', 'Business').has('theology')).toBe(true);
   });
+  it('REGRESSION: government ministers and ordinary words are not religion; religious ministers still are', () => {
+    for (const [t, c] of [['British prime minister meets French president for trade talks', 'World'], ['Finance minister announces budget cuts', 'World'], ['Foreign ministers meet in Geneva', null], ['Interior ministry confirms new rules', 'World'], ['Climate minister resigns', 'Politics'],
+      ['The advent of generative AI reshapes newsrooms', 'Technology'], ['The advent of cheap solar changes the grid', null], ['Currency denominations to change next year', 'Business'], ['Bank adds new denominations of bills', null], ['Pope County sheriff seeks funding', 'Local'], ['Parish council in Louisiana approves drainage plan', 'Local']] as const)
+      expect(has(t, c).has('theology'), t).toBe(false);
+    for (const [t, c] of [['Youth minister arrested after church trip', 'Local'], ['Baptist minister elected moderator', null], ['Ordained minister joins school board', 'Local'], ['Associate minister named at Grace Church', 'Local'], ['Church denominations split over vote', 'World'], ['Pope Leo visits Seattle', 'World'], ['Parishioners rally to save the parish church', 'Local'], ['Advent season begins with candle service', 'Local']] as const)
+      expect(has(t, c).has('theology'), t).toBe(true);
+    expect([...has('British prime minister meets French president for trade talks', 'World')]).toEqual(['world']);
+  });
   it('has its own section feed, Front Page block and Front Page Mix weight, and Gemini can file under Religion', () => {
     const s = src('General');
     const rel = story(s, 'Churches across Washington open doors for Easter Sunday', { ai: 'Religion' }), other = story(s, 'Seahawks edge 49ers', { ai: 'Sports' });

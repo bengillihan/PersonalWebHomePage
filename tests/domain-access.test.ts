@@ -9,7 +9,9 @@ import type { DB } from '../server/db.js';
 let fx: Fixture; beforeAll(async () => { fx = await fixtureServer(); }); afterAll(async () => { await fx.close(); });
 let db: DB; beforeEach(() => { db = memDb(); fx.hits.length = 0; });
 const DAY = 86_400_000;
-const page = (head = '', body = '<article><p>Story text.</p></article>') => `<!doctype html><html><head>${head}</head><body>${body}</body></html>`;
+const PARA = 'The council voted on Tuesday to fund dredging of the harbor channel this spring, after months of debate over the cost and the effect on local fishing crews and shippers.';
+const ARTICLE = `<article><p>${PARA}</p><p>${PARA}</p><p>${PARA}</p><p>${PARA}</p></article>`;
+const page = (head = '', body = ARTICLE) => `<!doctype html><html><head>${head}</head><body>${body}</body></html>`;
 const ld = (o: unknown) => `<script type="application/ld+json">${JSON.stringify(o)}</script>`;
 
 describe('what one page declares', () => {
@@ -29,6 +31,24 @@ describe('what one page declares', () => {
     for (const st of [401, 403, 404, 429, 500]) expect(readPage(st, page())).toBeNull();
     expect(readPage(200, '{"json":true}')).toBeNull();
     expect(readPage(200, page())).toMatchObject({ level: 'free' });
+  });
+  it('REGRESSION: login and bot-check pages (HTTP 200) are NO evidence, not "free"', () => {
+    for (const body of ['<main><h1>Sign in to continue</h1><p>Please sign in to continue reading. Create a free account or log in with your email address to see this page.</p></main>',
+      '<body><h1>Verify you are human</h1><p>Checking your browser before accessing the site. This process is automatic and your browser will redirect you shortly to the page you asked for.</p></body>',
+      '<div id="cf">Just a moment...</div><p>Enable JavaScript and cookies to continue to the website, then try again in a few seconds when the check completes automatically.</p>', `<h1>Access denied</h1>${ARTICLE.slice(0, 40)}`])
+      expect(readPage(200, page('', body)), body).toBeNull();
+    expect(readPage(200, page('', `<p class="x">Please sign in</p>${ARTICLE}${ARTICLE}${ARTICLE}${ARTICLE}${ARTICLE}${ARTICLE}${ARTICLE}${ARTICLE}${ARTICLE}`))).toMatchObject({ level: 'free' }); // a sign-in link on a real, long article is not a gate
+    expect(combine([readPage(200, page('', '<h1>Verify you are human</h1>')), readPage(403, '')])).toMatchObject({ level: 'unknown', pages: 0 });
+  });
+  it('REGRESSION: "free" needs readable article text; a thin or empty page is unknown', () => {
+    expect(readPage(200, page('', '<p>Story text.</p>'))).toBeNull(); expect(readPage(200, '<html><body><div id="app"></div><script>boot()</script></body></html>')).toBeNull();
+    expect(readPage(200, page())).toMatchObject({ level: 'free', evidence: expect.stringMatching(/readable/) });
+  });
+  it('REGRESSION: paywall markup is read by its VALUE: data-paywall="false" and inactive classes are not a paywall', () => {
+    for (const body of ['<article data-paywall="false">', "<article data-paywall='0'>", '<article data-paywall=off>', '<article data-paywall="disabled">', '<div class="no-paywall paywall-banner is-hidden">', '<div id="paywall-promo">', '<script>var cfg = {"paywall": false};</script><div>'])
+      expect(readPage(200, page('', body + ARTICLE.replace('<article>', ''))), body).toMatchObject({ level: 'free' });
+    for (const body of ['<article data-paywall="true">', '<article data-paywall>', '<article data-paywall="metered">', '<div class="story paywalled">', '<div class="is-paywall">', '<div id="paywall">', '<script>var cfg = {"paywall": true};</script><div>'])
+      expect(readPage(200, page('', body + ARTICLE.replace('<article>', ''))), body).toMatchObject({ level: 'metered' });
   });
   it('a domain takes the strongest declared evidence of its pages, and unknown when nothing could be read', () => {
     const f = { level: 'free', evidence: 'f' } as const, p = { level: 'paywalled', evidence: 'p' } as const, m = { level: 'metered', evidence: 'm' } as const;
