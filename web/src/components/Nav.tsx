@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { NAV } from '../sections';
 
 /**
- * Newspaper navigation. From the lg breakpoint (1024px) it is one horizontal bar; below that, tablets included, a single "Sections" button opens a two-column menu, so nine
- * tabs are never squeezed onto one row of a phone.
+ * Newspaper navigation. From the lg breakpoint (1024px) it is one horizontal bar; below that, tablets included, a single "Sections" button opens a two-column menu, so the
+ * tabs are never squeezed onto one row of a phone. On the bar they never wrap: they spread across the width and tighten (small type, tight padding) until they fit, down to 1024px.
  */
 export default function Nav({ tab, onPick }: { tab: string; onPick: (k: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -11,10 +11,10 @@ export default function Nav({ tab, onPick }: { tab: string; onPick: (k: string) 
   const pick = (k: string) => { setOpen(false); onPick(k); };
   return (
     <nav aria-label="Newspaper sections" className="border-y-2 border-slate-900 dark:border-slate-100">
-      <div role="tablist" aria-label="Sections" className="hidden lg:flex lg:flex-wrap lg:gap-x-1">
+      <div role="tablist" aria-label="Sections" className="hidden lg:flex lg:flex-nowrap lg:justify-between">
         {NAV.map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => pick(k)}
-            className={`px-3 py-2 text-sm font-semibold uppercase tracking-wide transition ${tab === k ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'}`}>{l}</button>
+            className={`whitespace-nowrap px-1.5 py-2 text-xs font-semibold uppercase tracking-wide transition xl:px-3 ${tab === k ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'}`}>{l}</button>
         ))}
       </div>
       <div className="lg:hidden">
