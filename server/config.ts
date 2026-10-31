@@ -1,5 +1,13 @@
 import path from 'node:path';
 
+/** Gemini requests per minute: a whole number >= 0 (0 = pacing off, deliberately). Anything else is a misconfiguration, so fail at startup rather than silently unthrottle. */
+function aiPerMinute(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return 12;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`AI_REQUESTS_PER_MINUTE must be a whole number of 0 or more (0 disables pacing), got "${raw}"`);
+  return n;
+}
+
 export interface Config {
   nodeEnv: string;
   isProd: boolean;
@@ -50,7 +58,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     geminiApiKey: env.GEMINI_API_KEY ?? '',
     geminiModel: env.GEMINI_MODEL ?? 'gemini-3.5-flash-lite',
     aiDailyBudget: Number(env.AI_DAILY_REQUEST_BUDGET ?? 200),
-    aiPerMinute: Number(env.AI_REQUESTS_PER_MINUTE ?? 12),
+    aiPerMinute: aiPerMinute(env.AI_REQUESTS_PER_MINUTE),
     marketProvider: env.MARKET_PROVIDER ?? 'twelvedata',
     twelveDataKey: env.TWELVEDATA_API_KEY ?? '',
     twelveDataCreditsPerMinute: Math.max(1, Math.floor(Number(env.TWELVEDATA_CREDITS_PER_MINUTE ?? 8)) || 8),

@@ -69,19 +69,31 @@ const fence = (s: string | null | undefined, max: number) => (s ?? '').replace(/
  */
 export class Ai {
   private backoffUntil = 0;
-  /** Start times (real ms, including slots promised to callers still waiting) of requests in the last minute. */
-  private slots: number[] = [];
-  /** `perMinute` stays under the provider's per-minute limit (15 on the free tier) so a refresh burst waits instead of being rejected. 0 disables pacing. */
-  constructor(private db: DB, private model: string, private transport: AiTransport | null, private envBudget: number, private clock: () => number = Date.now, private perMinute = 12) {}
+  /** Actual dispatch times (real ms) of requests in the last minute. */
+  private sent: number[] = [];
+  private gate: Promise<void> = Promise.resolve();
+  private perMinute: number;
+  /** `perMinute` stays under the provider's per-minute limit (15 on the free tier) so a refresh burst waits instead of being rejected. 0 disables pacing; anything not a whole number falls back to 12. */
+  constructor(private db: DB, private model: string, private transport: AiTransport | null, private envBudget: number, private clock: () => number = Date.now, perMinute = 12) {
+    this.perMinute = Number.isInteger(perMinute) && perMinute >= 0 ? perMinute : 12;
+  }
 
-  /** Synchronously claims the next send slot in a rolling 60s window and returns how long to wait for it. Claims happen before any await, so concurrent callers queue in order. */
-  private claimSlot(): number {
-    if (this.perMinute <= 0) return 0;
-    const now = Date.now();
-    this.slots = this.slots.filter((t) => t > now - 60_000);
-    const at = this.slots.length < this.perMinute ? now : this.slots[this.slots.length - this.perMinute] + 60_000;
-    this.slots.push(at); this.slots.sort((a, b) => a - b);
-    return Math.max(0, at - now);
+  /**
+   * Resolves when a request may be sent, and records the ACTUAL send time. Callers pass through one at a time, in order; after every sleep the window is
+   * re-checked against the real clock, so a late timer (paused process, busy loop) can never release more than `perMinute` requests in a rolling minute.
+   */
+  private pace(): Promise<void> {
+    if (this.perMinute <= 0) return Promise.resolve();
+    const turn = this.gate.then(async () => {
+      for (;;) {
+        const now = Date.now();
+        this.sent = this.sent.filter((t) => t > now - 60_000);
+        if (this.sent.length < this.perMinute) { this.sent.push(now); return; }
+        await new Promise((r) => setTimeout(r, Math.max(1, this.sent[0] + 60_000 - now)));
+      }
+    });
+    this.gate = turn.catch(() => undefined);
+    return turn;
   }
 
   get enabled(): boolean { return this.transport !== null; }
@@ -125,8 +137,7 @@ export class Ai {
 
   private async call<T>(task: string, call: JsonCall, schema: z.ZodType<T>): Promise<T | null> {
     if (!this.canCall()) return null; // don't hold a pacing slot for a request that cannot be sent
-    const wait = this.claimSlot();
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    await this.pace();
     const day = this.reserve(); // before anything is sent (re-checks budget and backoff after the wait)
     if (!day) return null;
     let settled = false; const end = (ok: boolean, inT = 0, outT = 0) => { if (!settled) { settled = true; this.settle(day, ok, inT, outT); } };
