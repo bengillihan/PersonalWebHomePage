@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, fullDate, timeAgo } from '../api';
 import type { AccessInfo, Story } from '../types';
 import BlockTopicForm from './BlockTopicForm';
+import { useReadOnly } from '../readonly';
 import ActionMenu, { type MenuItem } from './ActionMenu';
 
 const REASONS: [string, string][] = [['topic', 'Not interested in this topic'], ['already_knew', 'Already knew this'], ['low_importance', 'Low importance'], ['source', "Don't like this source"], ['duplicate', 'Duplicate']];
@@ -24,6 +25,7 @@ const EYE_OFF = 'M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A9.8 9.8 0 0112 5c5
 export type CardVariant = 'card' | 'lead' | 'brief';
 /** `card` is the Compact Feed card; `lead` and `brief` are the newspaper layouts (same controls, tighter type and a lead image). */
 export default function StoryCard({ story, showImages, onChange, onGone, onRead, variant = 'card' }: { variant?: CardVariant; story: Story; showImages: boolean; onChange: (s: Story) => void; onGone: (id: number) => void; onRead?: (s: Story, read: boolean, via: 'button' | 'link') => void }) {
+  const readOnly = useReadOnly();
   const [open, setOpen] = useState(false);
   const [fullSummary, setFullSummary] = useState(false);
   const [why, setWhy] = useState(false);
@@ -52,7 +54,8 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
   const thumbDown = () => (story.rating === -1 ? rate(0) : (setAskReason(true), rate(-1)));
   const hide = () => run(() => api(`/api/stories/${story.id}/hide`, { method: 'POST', body: { hidden: true } }), {}).then(() => onGone(story.id));
   const coverageCount = story.sourceCount + story.mutedSources;
-  const menuItems: MenuItem[] = [
+  const coverageItem: MenuItem[] = coverageCount > 1 ? [{ key: 'coverage', label: open ? 'Hide coverage' : `Coverage (${coverageCount} sources)`, expanded: open, onSelect: () => setOpen(!open) }] : [];
+  const menuItems: MenuItem[] = readOnly ? coverageItem : [
     { key: 'up', label: 'Thumbs up: more like this', ariaLabel: 'Thumbs up', checked: story.rating === 1, onSelect: thumbUp },
     { key: 'down', label: 'Thumbs down: less like this', ariaLabel: 'Thumbs down', checked: story.rating === -1, onSelect: thumbDown },
     { key: 'why', label: 'Why recommended?', expanded: why, onSelect: () => void toggleWhy() },
@@ -78,7 +81,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
             {p?.aggregated && <span className="chip" title="Found via a Google News aggregator feed; the link opens through Google News">via aggregator</span>}
           </div>
           <h2 className={HEADLINE[variant]}>
-            {p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={() => !effectivelyRead && setRead(true, 'link')} className="hover:text-indigo-600 hover:underline dark:hover:text-indigo-400">{story.title}</a> : story.title}
+            {p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={() => !readOnly && !effectivelyRead && setRead(true, 'link')} className="hover:text-indigo-600 hover:underline dark:hover:text-indigo-400">{story.title}</a> : story.title}
           </h2>
           {story.summary ? (<>
             <p className={`mt-2 text-slate-700 dark:text-slate-300 ${variant === 'brief' ? `text-sm leading-snug ${fullSummary ? '' : 'line-clamp-3'}` : variant === 'lead' ? 'text-base leading-relaxed sm:text-lg' : 'text-[0.97rem] leading-relaxed'}`}>{story.summary}</p>
@@ -97,7 +100,9 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
 
       {story.why && variant !== 'brief' && <p className="mt-2 text-xs text-slate-500">{story.why.reasons[0]}</p>}
 
-      {variant === 'brief' ? (
+      {readOnly ? (variant === 'brief' ? (menuItems.length > 0 && <div className="mt-2 flex items-center border-t border-slate-100 pt-1.5 dark:border-slate-800"><span className="flex-1" /><ActionMenu label="More actions" items={menuItems} /></div>)
+        : coverageCount > 1 && <div className="mt-3 flex items-center justify-end border-t border-slate-100 pt-2.5 dark:border-slate-800"><button className="btn btn-outline text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide coverage' : `See coverage from ${story.sourceCount} ${story.sourceCount === 1 ? 'source' : 'sources'}`}</button></div>)
+      : variant === 'brief' ? (
         <div className="mt-2 flex items-center gap-0 border-t border-slate-100 pt-1.5 dark:border-slate-800">
           <button className={btn(story.bookmarked)} aria-pressed={story.bookmarked} aria-label="Bookmark" title="Save" onClick={toggleBookmark}><Icon d={MARK} fill={story.bookmarked} /></button>
           <button className="btn btn-ghost text-xs !px-1.5 !py-1" onClick={() => setRead(!effectivelyRead, 'button')}>{effectivelyRead ? 'Mark unread' : 'Mark read'}</button>
@@ -147,7 +152,7 @@ export default function StoryCard({ story, showImages, onChange, onGone, onRead,
               <span className="text-xs text-slate-400">{timeAgo(a.publishedAt)}</span>
               {a.muted && <span className="chip" title="You muted this publisher: it is hidden from your feeds, but listed here because it covers this story.">muted publisher</span>}
               {a.alsoVia.length > 0 && <span className="text-xs text-slate-400" title="Other feeds that carried this same article">also via {a.alsoVia.join(', ')}</span>}
-              <button className="text-xs text-slate-400 underline hover:text-slate-600" onClick={() => api(`/api/stories/${story.id}/ungroup`, { method: 'POST', body: { articleId: a.id } }).then(() => onGone(-1))}>ungroup</button>
+              {!readOnly && <button className="text-xs text-slate-400 underline hover:text-slate-600" onClick={() => api(`/api/stories/${story.id}/ungroup`, { method: 'POST', body: { articleId: a.id } }).then(() => onGone(-1))}>ungroup</button>}
             </li>
           ))}
         </ul>

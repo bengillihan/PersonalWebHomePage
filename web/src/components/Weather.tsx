@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useReadOnly } from '../readonly';
 import { api, timeAgo } from '../api';
 import type { WeatherLocation, WeatherView } from '../types';
 
@@ -7,6 +8,7 @@ const shortDate = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateStr
 
 /** `card` is the compact-feed card; `strip` is a one-line summary for the Front Page; `expanded` is the dedicated Weather section. */
 export default function Weather({ version, variant = 'card', onOpen }: { version: number; variant?: 'card' | 'strip' | 'expanded'; onOpen?: () => void }) {
+  const readOnly = useReadOnly();
   const [w, setW] = useState<WeatherView | null>(null);
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -64,11 +66,11 @@ export default function Weather({ version, variant = 'card', onOpen }: { version
           {f && <> · <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">{f.current.icon} {f.current.tempF}°F</span> {f.current.description}</>}</span>
         <span className="flex items-center gap-2">
           {w.fetchedAt ? `updated ${timeAgo(w.fetchedAt)}` : w.refreshing ? 'loading…' : 'no data yet'}
-          <button className="underline hover:text-slate-700 dark:hover:text-slate-200" onClick={() => setEditing(!editing)} aria-expanded={editing}>Change location</button>
+          {!readOnly && <button className="underline hover:text-slate-700 dark:hover:text-slate-200" onClick={() => setEditing(!editing)} aria-expanded={editing}>Change location</button>}
         </span>
       </div>
 
-      {editing && (
+      {editing && !readOnly && (
         <div className="mb-2 rounded-lg bg-slate-50 p-2 dark:bg-slate-800/60">
           <div className="flex gap-2"><input className="input !py-1.5" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && q.trim().length >= 2 && search()} placeholder="ZIP code or city (e.g. 98198, Tacoma, WA)" aria-label="Weather location" />
             <button className="btn btn-primary" disabled={busy || q.trim().length < 2} onClick={search}>Search</button></div>

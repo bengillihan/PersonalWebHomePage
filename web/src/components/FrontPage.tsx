@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { FrontPageData, Status, Story } from '../types';
 import StoryCard from './StoryCard';
+import { useReadOnly } from '../readonly';
 
 type Data = Pick<FrontPageData, 'lead' | 'secondary' | 'sections'>;
 const mapStories = (d: Data, fn: (s: Story) => Story | null): Data => ({
@@ -20,6 +21,7 @@ const SectionHead = ({ children, onClick }: { children: string; onClick?: () => 
  * hide work exactly as in the feed; a story marked read leaves the page at once (with Undo) unless "Show read stories" is on.
  */
 export default function FrontPage({ version, onStatus, onOpenSettings, onNavigate }: { version: number; onStatus: (s: Status) => void; onOpenSettings: (p: string) => void; onNavigate: (tab: string) => void }) {
+  const readOnly = useReadOnly();
   const [data, setData] = useState<Data | null>(null);
   const [showImages, setShowImages] = useState(true); const [showRead, setShowRead] = useState(false); const [hasAny, setHasAny] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +72,7 @@ export default function FrontPage({ version, onStatus, onOpenSettings, onNavigat
     <div className="space-y-8">
       {empty ? (
         <div className="card p-8 text-center">
-          {!hasAny ? (<><p className="text-lg font-semibold">Welcome — your front page is warming up</p><p className="mx-auto mt-2 max-w-md text-sm text-slate-500">The first fetch runs in the background (usually under a minute).</p>
+          {readOnly ? <p>No stories here yet. Check back soon.</p> : !hasAny ? (<><p className="text-lg font-semibold">Welcome — your front page is warming up</p><p className="mx-auto mt-2 max-w-md text-sm text-slate-500">The first fetch runs in the background (usually under a minute).</p>
             <div className="mt-4 flex justify-center gap-2"><button className="btn btn-primary" onClick={() => onOpenSettings('interests')}>Add interests</button><button className="btn btn-outline" onClick={() => onOpenSettings('sources')}>Review sources</button></div></>)
             : <><p>You’re all caught up. 🎉</p>{!showRead && <p className="mt-1 text-sm text-slate-500">Read stories are hidden. <button className="underline" onClick={() => onOpenSettings('preferences')}>Show read stories</button></p>}</>}
         </div>

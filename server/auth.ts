@@ -34,6 +34,13 @@ const b64 = (n: number) => crypto.randomBytes(n).toString('base64url');
 const hmac = (secret: string, v: string) => crypto.createHmac('sha256', secret).update(v).digest('hex');
 const safeEq = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
+/**
+ * The only API routes a visitor who is not signed in may call, and only with GET/HEAD: reading the news pages and the weather. Everything else (settings,
+ * sources, interests, saved stories, markets and the watchlist, diagnostics, backups, every write) still needs the owner's session. Visitors can never trigger
+ * a news or market refresh, so they cost nothing but a read.
+ */
+export const PUBLIC_READ_ROUTES: ReadonlySet<string> = new Set(['/api/me', '/api/status', '/api/feed', '/api/frontpage', '/api/weather']);
+
 export interface Session { userId: number; email: string; name: string | null; csrf: string }
 declare module 'fastify' { interface FastifyRequest { session: Session | null } }
 
@@ -69,7 +76,10 @@ export function registerAuth(app: FastifyInstance, cfg: Config, db: DB, oidc: Oi
   /** Guards the private API: session required; state-changing methods also need CSRF header + same-origin. */
   app.addHook('preHandler', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return;
-    if (!req.session) return reply.code(401).send({ error: 'unauthenticated' });
+    if (!req.session) {
+      if (['GET', 'HEAD'].includes(req.method) && PUBLIC_READ_ROUTES.has(req.url.split('?')[0])) return; // read-only view: see /api/me and the public routes
+      return reply.code(401).send({ error: 'unauthenticated' });
+    }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const hdr = String(req.headers['x-csrf-token'] ?? '');
       if (!safeEq(hdr, req.session.csrf)) return reply.code(403).send({ error: 'bad_csrf' });

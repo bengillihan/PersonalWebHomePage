@@ -8,7 +8,13 @@ import { domainLevels, hostOf } from './domain-access.js';
 import { classify, isSection, SECTION_LABEL, LOCAL_PRIORITY_BOOST, type Section } from './sections.js';
 import { FRONT_KEYS, FRONT_SCALE, getFrontMix, getGeo, type FrontKey } from '../settings.js';
 
-export interface FeedQuery { tab: string; q?: string; topic?: string; cursor?: string; limit?: number }
+/**
+ * `publicView`: the read-only view for someone who is not signed in. It is the owner's curated feed with none of the owner's private state: read, hidden-read,
+ * saved and rating marks never show (and "hide read stories" does not apply, so the owner reading a story never removes it for visitors), muted publishers
+ * and blocked-topic names are not revealed, nothing explains the owner's ranking, and Saved / Unread are empty. The server sets it from the session, never the client.
+ */
+export interface FeedQuery { tab: string; q?: string; topic?: string; cursor?: string; limit?: number; publicView?: boolean }
+const publicPrefs = (db: DB) => ({ ...getPrefs(db), showRead: true, mutedPublishers: [] as string[] });
 export interface StoryDto {
   id: number; title: string; summary: string | null; summaryKind: string | null; differences: string | null;
   category: string | null; importance: number; publishedAt: number; updatedAt: number; sourceCount: number;
@@ -84,7 +90,9 @@ function sectionOrder(scored: Scored[], rows: any[], section: Section, geo: Retu
 
 export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
   const limit = Math.min(Math.max(fq.limit ?? 20, 1), 50);
-  const prefs = getPrefs(db);
+  const pub = !!fq.publicView;
+  if (pub && (fq.tab === 'saved' || fq.tab === 'unread')) return { items: [], nextCursor: null };
+  const prefs = pub ? publicPrefs(db) : getPrefs(db);
   const where: string[] = []; const params: any[] = [];
   const cutoff = Date.now() - prefs.retentionDays * 86_400_000;
   const feedView = !(fq.q ?? '').trim(); // exclusions (blocked topics, muted publishers) apply to the feeds, never to explicit search or Saved
@@ -108,7 +116,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
     if (cur) { where.push('(c.last_published_at < ? OR (c.last_published_at = ? AND c.id < ?))'); params.push(cur.t, cur.t, cur.i); }
     const rows = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} ORDER BY c.last_published_at DESC, c.id DESC LIMIT ?`).all(...params, limit + 1) as any[];
     const page = rows.slice(0, limit);
-    const items = hydrate(db, page, undefined, prefs.mutedPublishers);
+    const items = hydrate(db, page, undefined, prefs.mutedPublishers, pub);
     const last = page[page.length - 1];
     return { items, nextCursor: rows.length > limit && last ? enc({ t: last.last_published_at, i: last.id }) : null };
   }
@@ -125,7 +133,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
     total = Number.isInteger(cur.t) ? cur.t : remaining.length;
   } else { // first page (or an older offset-style cursor, which restarts; the client de-duplicates): rank the pool now
     const pool = db.prepare(`${BASE_SELECT} WHERE ${where.join(' AND ')} ORDER BY c.last_published_at DESC LIMIT ${SNAPSHOT_MAX}`).all(...params) as any[];
-    const scored = scoreRows(db, pool);
+    const scored = scoreRows(db, pool, pub);
     const ordered: Scored[] = fq.tab === 'explore'
       ? scored.filter((s) => s.c.interestScore < 0.1 && !s.c.excluded && s.c.rating !== -1 && (s.parts.feedback >= 0.35)).sort((a, b) => b.c.importance * b.parts.recency - a.c.importance * a.parts.recency)
       : section ? sectionOrder(scored, pool, section, getGeo(db))
@@ -140,8 +148,8 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
     for (const id of slice) { const r = byId.get(id); if (r) page.push(r); } // snapshot order; ineligible-by-now stories are skipped
   }
   const next = remaining.slice(pos);
-  const why = new Map(scoreRows(db, page).map((s) => [s.c.id, s]));
-  return { items: hydrate(db, page, why, prefs.mutedPublishers), nextCursor: next.length ? enc({ r: next, t: total }) : null, total };
+  const why = new Map(scoreRows(db, page, pub).map((s) => [s.c.id, s]));
+  return { items: hydrate(db, page, why, prefs.mutedPublishers, pub), nextCursor: next.length ? enc({ r: next, t: total }) : null, total };
 }
 
 export interface FrontPage { lead: StoryDto | null; secondary: StoryDto[]; sections: { key: FrontKey; label: string; items: StoryDto[] }[] }
@@ -167,8 +175,8 @@ const FRONT_LABEL = (k: FrontKey) => (k === 'other' ? 'More stories' : SECTION_L
  *    so one busy category cannot fill the page;
  *  - each story appears once (lead, secondary, or its own primary section). Nothing here calls Gemini.
  */
-export function queryFrontPage(db: DB): FrontPage {
-  const prefs = getPrefs(db); const geo = getGeo(db); const mix = getFrontMix(db);
+export function queryFrontPage(db: DB, publicView = false): FrontPage {
+  const prefs = publicView ? publicPrefs(db) : getPrefs(db); const geo = getGeo(db); const mix = getFrontMix(db);
   const where: string[] = []; const params: any[] = [];
   commonFilters(prefs, 'foryou', true, false, where, params);
   params[0] = Math.max(params[0], Date.now() - 14 * 86_400_000);
@@ -176,7 +184,7 @@ export function queryFrontPage(db: DB): FrontPage {
   const rows = new Map(pool.map((r) => [r.id, r]));
   interface P { s: Scored; place: FrontKey; w: number; final: number; boost: number }
   const items: P[] = [];
-  for (const s of scoreRows(db, pool)) {
+  for (const s of scoreRows(db, pool, publicView)) {
     if (s.c.rating === -1 || (s.c.excluded && s.bucket !== 'major')) continue; // same drops as the For You feed
     const r = rows.get(s.c.id); const cls = classify({ category: r.category, title: r.title, summary: r.summary, localSource: s.c.isLocal }, geo);
     const major = mix.majorException && s.parts.importance >= mix.majorThreshold;
@@ -204,11 +212,11 @@ export function queryFrontPage(db: DB): FrontPage {
     mine.forEach(take); return { key, picks: mine };
   }).filter((b) => b.picks.length);
   const why = new Map([...lead, ...secondary, ...blocks.flatMap((b) => b.picks)].map((x) => [x.s.c.id, x.s]));
-  const dto = (picks: P[]) => hydrate(db, picks.map((x) => rows.get(x.s.c.id)), why, prefs.mutedPublishers);
+  const dto = (picks: P[]) => hydrate(db, picks.map((x) => rows.get(x.s.c.id)), why, prefs.mutedPublishers, publicView);
   return { lead: dto(lead)[0] ?? null, secondary: dto(secondary), sections: blocks.map((b) => ({ key: b.key, label: FRONT_LABEL(b.key), items: dto(b.picks) })) };
 }
 
-function scoreRows(db: DB, rows: any[]): Scored[] {
+function scoreRows(db: DB, rows: any[], publicView = false): Scored[] {
   if (!rows.length) return [];
   const prefs = getPrefs(db);
   const ids = rows.map((r) => r.id);
@@ -244,13 +252,13 @@ function scoreRows(db: DB, rows: any[]): Scored[] {
       interestScore: bestTopic.get(r.id)?.score ?? 0, interestName: bestTopic.get(r.id)?.name ?? null,
       interestWeight: bestTopic.get(r.id)?.weight ?? null, demotedBy: (lessTopic.get(r.id)?.score ?? 0) >= INTEREST_MATCH ? lessTopic.get(r.id)!.name : null,
       excluded: excludes.some((t) => t.exclude.some((k) => k.trim() && text.includes(k.toLowerCase()))),
-      rating: r.rating, readAt: r.read_at,
+      rating: r.rating, readAt: publicView ? null : r.read_at,
     };
     return scoreCandidate(cand, prefs, model);
   });
 }
 
-function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: string[] = []): StoryDto[] {
+function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: string[] = [], publicView = false): StoryDto[] {
   const preferFree = getPrefs(db).preferFreeCoverage;
   const mutedSet = new Set(mutedNames.map(normName));
   const isMuted = (a: { publisher: string }) => mutedSet.has(normName(a.publisher));
@@ -298,12 +306,12 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
       summary: useOwn ? own?.summary ?? null : r.summary, summaryKind: useOwn ? (own ? own.summary_kind : 'headline') : r.summary_kind, differences: mutedHere ? null : r.differences, category: r.category,
       importance: r.importance, publishedAt: r.last_published_at, updatedAt: r.updated_at,
       sourceCount: unmuted.length ? publishers(unmuted) : r.source_count, mutedSources: unmuted.length ? publishers(list.filter(isMuted)) : 0, // nothing unmuted to prefer: show the real coverage
-      isRead: !!r.read_at, isUpdated: !!r.read_at && (r.substantive_at ?? 0) > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
+      isRead: !publicView && !!r.read_at, isUpdated: !publicView && !!r.read_at && (r.substantive_at ?? 0) > r.read_at, bookmarked: !publicView && !!r.bookmarked, rating: publicView ? 0 : r.rating,
       imageUrl: prim?.image_url ?? null,
       primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator', access: accessInfo(prim.article_access, prim.source_access, dom(prim)) } : null,
       articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [], muted: isMuted(a), access: accessInfo(a.article_access, a.source_access, dom(a)) })),
-      blockedBy: list.length && list.every((a) => blockedArticles.has(a.id)) ? [...new Set(list.flatMap((a) => blockedArticles.get(a.id)!))] : [],
-      ...(w ? { why: { score: w.score, parts: w.parts as any, reasons: w.reasons, bucket: w.bucket } } : {}),
+      blockedBy: !publicView && list.length && list.every((a) => blockedArticles.has(a.id)) ? [...new Set(list.flatMap((a) => blockedArticles.get(a.id)!))] : [],
+      ...(w && !publicView ? { why: { score: w.score, parts: w.parts as any, reasons: w.reasons, bucket: w.bucket } } : {}),
     };
   });
 }

@@ -61,23 +61,27 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
 
   app.addHook('onSend', async (req, reply) => { if (req.url.startsWith('/api/')) reply.header('cache-control', 'private, no-store'); });
 
-  app.get('/api/me', async (req) => ({ email: req.session!.email, name: req.session!.name, csrfToken: req.session!.csrf, theme: getPrefs(db).theme }));
+  // Someone who is not signed in gets a read-only identity (no email, no CSRF token, no saved theme) instead of a 401, so the app can show the public view.
+  app.get('/api/me', async (req) => req.session ? { anonymous: false, email: req.session.email, name: req.session.name, csrfToken: req.session.csrf, theme: getPrefs(db).theme } : { anonymous: true, email: null, name: null, csrfToken: null, theme: 'system' });
   app.get('/api/status', async () => status());
 
   // ---- feed (stale-while-revalidate: serve cached rows now, refresh in the background) ----
-  app.get('/api/feed', async (req) => {
+  const visitors = { config: { rateLimit: { max: (req: any) => (req.session ? 300 : 60), timeWindow: '1 minute' } } }; // a visitor's reads are cheaper to refuse than the owner's
+  app.get('/api/feed', visitors, async (req) => {
     const q = z.object({ tab: z.string().max(30).default('foryou'), q: z.string().max(100).optional(), topic: z.string().max(80).optional(), cursor: z.string().max(12_000).optional() /* ranked pages carry a snapshot of the ids still to serve */, limit: z.coerce.number().int().min(1).max(50).optional() }).parse(req.query);
-    if (!q.cursor) { refresher.maybeRefresh(); void market.refreshIfNeeded().catch(() => {}); }
-    const page = queryFeed(db, q);
+    const publicView = !req.session; // visitors never start a refresh (it costs Gemini, feed and market requests) and never see the owner's read state
+    if (!q.cursor && !publicView) { refresher.maybeRefresh(); void market.refreshIfNeeded().catch(() => {}); }
+    const page = queryFeed(db, { ...q, publicView });
     const total = (db.prepare('SELECT COUNT(*) n FROM story_clusters').get() as any).n;
-    return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: getPrefs(db).showRead };
+    return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: publicView ? true : getPrefs(db).showRead };
   });
   // Front Page: one ranked pool split into a lead, secondary stories and per-section blocks, each story once (see queryFrontPage).
-  app.get('/api/frontpage', async () => {
-    refresher.maybeRefresh(); void market.refreshIfNeeded().catch(() => {});
-    const page = queryFrontPage(db);
+  app.get('/api/frontpage', visitors, async (req) => {
+    const publicView = !req.session;
+    if (!publicView) { refresher.maybeRefresh(); void market.refreshIfNeeded().catch(() => {}); }
+    const page = queryFrontPage(db, publicView);
     const total = (db.prepare('SELECT COUNT(*) n FROM story_clusters').get() as any).n;
-    return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: getPrefs(db).showRead };
+    return { ...page, status: status(), hasAnyStories: total > 0, showImages: getPrefs(db).showImages, showRead: publicView ? true : getPrefs(db).showRead };
   });
   app.get('/api/front-mix', async () => ({ mix: getFrontMix(db), defaults: DEFAULT_FRONT_MIX }));
   app.put('/api/front-mix', async (req) => {

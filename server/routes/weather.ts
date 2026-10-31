@@ -9,10 +9,12 @@ export function registerWeather(app: FastifyInstance, weather: Weather) {
     throw e;
   };
 
-  app.get('/api/weather', async () => ({
-    ...(await weather.get()),
+  app.get('/api/weather', { config: { rateLimit: { max: (req: any) => (req.session ? 300 : 60), timeWindow: '1 minute' } } }, async (req) => {
+    const view = await weather.get(); // a visitor sees the place by name only: never the exact coordinates or ZIP code
+    return {
+    ...(req.session ? view : { ...view, location: { label: view.location.label, lat: null, lon: null, zip: null } }),
     attribution: [{ text: 'Weather data by Open-Meteo.com (CC BY 4.0, non-commercial use)', url: 'https://open-meteo.com/' }, { text: 'ZIP lookup by Zippopotam.us', url: 'https://www.zippopotam.us/' }],
-  }));
+  }; });
 
   app.get('/api/weather/search', limited, async (req, reply) => {
     const { q } = z.object({ q: z.string().trim().min(2).max(60) }).parse(req.query);

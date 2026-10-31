@@ -227,9 +227,9 @@ describe('API', () => {
   afterEach(async () => { await app.close(); });
   const call = (method: any, url: string, payload?: unknown) => app.inject({ method, url, cookies: { sid: cookie }, headers: { 'x-csrf-token': csrf }, payload: payload as any });
 
-  it('serves the front page and section tabs, and requires sign-in', async () => {
+  it('serves the front page and section tabs to the signed-in owner (visitors get the read-only view: see public-view.test.ts)', async () => {
     const s = src('General'); const c = story(s, 'Chipmaker shares jump', { ai: 'Business' });
-    expect((await app.inject({ url: '/api/frontpage' })).statusCode).toBe(401);
+    expect((await app.inject({ url: '/api/frontpage' })).json().lead.id).toBe(c); // a visitor sees the same stories, without the owner's state
     const fp = (await call('GET', '/api/frontpage')).json(); expect(fp.lead.id).toBe(c); expect(fp).toMatchObject({ hasAnyStories: true, showRead: false, status: expect.any(Object) });
     expect(((await call('GET', '/api/feed?tab=business')).json().items as any[]).map((i) => i.id)).toEqual([c]);
   });

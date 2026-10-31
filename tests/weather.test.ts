@@ -167,8 +167,8 @@ describe('weather API (authenticated)', () => {
   });
   const call = (method: any, url: string, payload?: unknown) => app.inject({ method, url, cookies: { sid: cookie }, headers: { 'x-csrf-token': csrf }, payload: payload as any });
 
-  it('requires sign-in for every weather route', async () => {
-    for (const [m, u] of [['GET', '/api/weather'], ['GET', '/api/weather/search?q=seattle'], ['PUT', '/api/weather/location']] as const) expect((await app.inject({ method: m, url: u })).statusCode, u).toBe(401);
+  it('requires sign-in to search for or change the weather location (the forecast itself is a public read)', async () => {
+    for (const [m, u] of [['GET', '/api/weather/search?q=seattle'], ['PUT', '/api/weather/location']] as const) expect((await app.inject({ method: m, url: u })).statusCode, u).toBe(401);
     await app.close();
   });
   it('serves the default location with a five-day forecast and attribution', async () => {

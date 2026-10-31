@@ -20,6 +20,13 @@ beforeEach(async () => {
 });
 afterEach(async () => { await app.close(); });
 
+/** The session no longer works: /api/me answers as a read-only visitor and private routes refuse it. */
+async function expectVisitor(cookie: string) {
+  const me = await app.inject({ url: '/api/me', cookies: { sid: cookie } });
+  expect(me.statusCode).toBe(200); expect(me.json()).toMatchObject({ anonymous: true, email: null, csrfToken: null });
+  expect((await app.inject({ url: '/api/sources', cookies: { sid: cookie } })).statusCode).toBe(401);
+}
+
 async function login(): Promise<{ cookie: string; csrf: string }> {
   const r1 = await app.inject({ method: 'GET', url: '/auth/login' });
   expect(r1.statusCode).toBe(302);
@@ -35,7 +42,7 @@ async function login(): Promise<{ cookie: string; csrf: string }> {
 
 describe('authentication & session security', () => {
   it('blocks every private API route when unauthenticated', async () => {
-    for (const [m, u] of [['GET', '/api/feed'], ['GET', '/api/sources'], ['GET', '/api/market'], ['GET', '/api/diagnostics'], ['GET', '/api/export'], ['POST', '/api/refresh'], ['POST', '/api/sources/discover'], ['DELETE', '/api/sources/1'], ['GET', '/api/nonexistent']] as const) {
+    for (const [m, u] of [['GET', '/api/sources'], ['GET', '/api/market'], ['GET', '/api/diagnostics'], ['GET', '/api/export'], ['POST', '/api/refresh'], ['POST', '/api/sources/discover'], ['DELETE', '/api/sources/1'], ['GET', '/api/nonexistent']] as const) {
       const r = await app.inject({ method: m, url: u });
       expect(r.statusCode, `${m} ${u}`).toBe(401);
     }
@@ -73,15 +80,15 @@ describe('authentication & session security', () => {
     expect((await login()).cookie).not.toBe('');
   });
   it('forged / expired session cookies do not authenticate', async () => {
-    expect((await app.inject({ url: '/api/me', cookies: { sid: 'forged-token' } })).statusCode).toBe(401);
+    await expectVisitor('forged-token');
     const { cookie } = await login();
     db.prepare('UPDATE sessions SET expires_at = 1').run();
-    expect((await app.inject({ url: '/api/me', cookies: { sid: cookie } })).statusCode).toBe(401);
+    await expectVisitor(cookie);
   });
   it('allowlist is re-checked per request (changed email revokes access)', async () => {
     const { cookie } = await login();
     db.prepare("UPDATE users SET email = 'someone@else.com'").run();
-    expect((await app.inject({ url: '/api/me', cookies: { sid: cookie } })).statusCode).toBe(401);
+    await expectVisitor(cookie);
   });
   it('requires CSRF token and same origin on state-changing requests', async () => {
     const { cookie, csrf } = await login();
@@ -94,7 +101,7 @@ describe('authentication & session security', () => {
   it('logout destroys the server-side session', async () => {
     const { cookie, csrf } = await login();
     expect((await app.inject({ method: 'POST', url: '/auth/logout', cookies: { sid: cookie }, headers: { 'x-csrf-token': csrf } })).statusCode).toBe(200);
-    expect((await app.inject({ url: '/api/me', cookies: { sid: cookie } })).statusCode).toBe(401);
+    await expectVisitor(cookie);
   });
 });
 

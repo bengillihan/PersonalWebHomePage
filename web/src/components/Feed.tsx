@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { FeedResponse, Status, Story } from '../types';
 import StoryCard from './StoryCard';
+import { useReadOnly } from '../readonly';
 
 export interface FeedFilter { tab: string; q: string; topic?: string }
 
 /** `newspaper` lays the same stories out in columns (the first one as a lead on section pages); `compact` is the single-column feed. */
 export default function Feed({ filter, onStatus, onOpenSettings, newVersion, layout = 'compact', lead = false }: { layout?: 'compact' | 'newspaper'; lead?: boolean; filter: FeedFilter; onStatus: (s: Status) => void; onOpenSettings: (p: string) => void; newVersion: number }) {
+  const readOnly = useReadOnly();
   const [items, setItems] = useState<Story[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,7 +102,7 @@ export default function Feed({ filter, onStatus, onOpenSettings, newVersion, lay
     if (!items.length) {
       return (
         <div className="card p-8 text-center">
-          {!hasAny ? (<>
+          {readOnly ? <p>{filter.q ? `No stories match “${filter.q}”.` : 'No stories here yet.'}</p> : !hasAny ? (<>
             <p className="text-lg font-semibold">Welcome — your feed is warming up</p>
             <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">The first fetch runs in the background (usually under a minute). You can add interests and tune sources while you wait.</p>
             <div className="mt-4 flex justify-center gap-2"><button className="btn btn-primary" onClick={() => onOpenSettings('interests')}>Add interests</button><button className="btn btn-outline" onClick={() => onOpenSettings('sources')}>Review sources</button></div>
