@@ -43,7 +43,7 @@ export async function buildApp(cfg: Config, db: DB, o: AppOverrides = {}): Promi
   const ai = new Ai(db, cfg.geminiModel, transport, cfg.aiDailyBudget, Date.now, cfg.aiPerMinute);
   const provider = o.provider ?? createTwelveData(cfg.twelveDataKey, undefined, {}, new CreditLimiter(db, cfg.twelveDataCreditsPerMinute));
   const market = new MarketService(db, provider);
-  const refresher = new Refresher({ db, ai, log: app.log as any, fetchOpts: o.fetchOpts });
+  const refresher = new Refresher({ db, ai, log: app.log as any, fetchOpts: o.fetchOpts, domainAccess: !o.fetchOpts?.allowPrivate });
   const oidc = o.oidc !== undefined ? o.oidc : cfg.googleClientId && cfg.googleClientSecret ? createGoogleOidc(cfg) : null;
 
   registerAuth(app, cfg, db, oidc);

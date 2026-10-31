@@ -1,6 +1,6 @@
 export interface Status { newsRefreshing: boolean; marketRefreshing: boolean; lastNewsRefreshAt: number | null; lastMarketFetchAt: number | null; stale: boolean; aiEnabled: boolean }
 /** label is null when access is unknown (nothing is shown). 'Likely paywall' / 'Usually free' are publisher-based estimates; 'Free' / 'Paywall' come from the article's own metadata. */
-export interface AccessInfo { level: 'free' | 'metered' | 'paywalled' | 'unknown'; basis: 'article' | 'publisher' | 'none'; label: string | null }
+export interface AccessInfo { level: 'free' | 'metered' | 'paywalled' | 'unknown'; basis: 'article' | 'publisher' | 'domain' | 'none'; label: string | null }
 export interface Story {
   id: number; title: string; summary: string | null; summaryKind: 'ai' | 'excerpt' | 'headline' | null; differences: string | null;
   category: string | null; importance: number; publishedAt: number; updatedAt: number; sourceCount: number;
@@ -20,7 +20,7 @@ export interface Quote {
 }
 export interface Source {
   id: number; name: string; siteUrl: string; feedUrl: string | null; kind: 'rss' | 'aggregator'; aggregatorLabel: string | null; priority: 'high' | 'normal' | 'low';
-  enabled: boolean; access: 'free' | 'metered' | 'paywalled' | 'unknown'; coverage: 'comprehensive' | 'interest'; categories: string[]; isLocal: boolean; health: 'unknown' | 'ok' | 'stale' | 'error' | 'disabled'; statusReason: string | null; freshnessHours: number | null; freshnessDefaultHours: number;
+  enabled: boolean; access: 'free' | 'metered' | 'paywalled' | 'unknown'; detectedAccess?: { level: 'free' | 'metered' | 'paywalled'; evidence: string; checkedAt: number } | null; coverage: 'comprehensive' | 'interest'; categories: string[]; isLocal: boolean; health: 'unknown' | 'ok' | 'stale' | 'error' | 'disabled'; statusReason: string | null; freshnessHours: number | null; freshnessDefaultHours: number;
   lastCheckedAt: number | null; lastSuccessAt: number | null; lastItemAt: number | null; lastError: string | null; articleCount: number;
 }
 export interface BlockedTopic { id: number; name: string; description: string; keywords: string[]; categories: string[]; enabled: boolean; seeded: boolean; blockedArticles: number }

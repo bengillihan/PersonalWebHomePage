@@ -4,6 +4,7 @@ import { balanceFeed, buildFeedbackModel, INTEREST_MATCH, scoreCandidate, type C
 import { loadTopics, weightFactor } from './topics.js';
 import { byRank, isUsableSummary } from './cluster.js';
 import { accessInfo, accessTier, type AccessInfo } from './access.js';
+import { domainLevels, hostOf } from './domain-access.js';
 import { classify, isSection, SECTION_LABEL, LOCAL_PRIORITY_BOOST, type Section } from './sections.js';
 import { FRONT_KEYS, getFrontMix, getGeo, type FrontKey } from '../settings.js';
 
@@ -264,6 +265,8 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
     WHERE a.cluster_id IN (${marks}) AND x.source_id != a.source_id ORDER BY s.name`).all(...ids) as { article_id: number; name: string }[]) (via.get(v.article_id) ?? via.set(v.article_id, []).get(v.article_id)!).push(v.name);
   const blockedArticles = new Map<number, string[]>();
   if (arts.length) for (const r of db.prepare(`SELECT ab.article_id, bt.name FROM article_blocks ab JOIN blocked_topics bt ON bt.id = ab.topic_id WHERE bt.enabled = 1 AND ab.article_id IN (${arts.map(() => '?').join(',')})`).all(...arts.map((a) => a.id)) as { article_id: number; name: string }[]) (blockedArticles.get(r.article_id) ?? blockedArticles.set(r.article_id, []).get(r.article_id)!).push(r.name);
+  const levels = domainLevels(db, arts.map((a) => a.url)); // the automatic domain check: only consulted when neither the article nor the source says anything
+  const dom = (a: { url: string }) => levels.get(hostOf(a.url) ?? '') ?? null;
   const by = new Map<number, any[]>();
   for (const a of arts) (by.get(a.cluster_id) ?? by.set(a.cluster_id, []).get(a.cluster_id)!).push(a);
   return rows.map((r) => {
@@ -279,7 +282,7 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
     // that tier keep the story's existing choice (its stored primary, else its usual ranking). Off, or nothing to choose between: exactly the behaviour above.
     if (preferFree && list.length > 1) {
       const pool = unmuted.length ? unmuted : list;
-      const tierOf = (a: any) => accessTier(a.article_access, a.source_access);
+      const tierOf = (a: any) => accessTier(a.article_access, a.source_access, dom(a));
       const best = Math.min(...pool.map(tierOf)); const subset = pool.filter((a) => tierOf(a) === best);
       prim = mutedHere ? pickMuted(subset) : subset.includes(prim0) ? prim0 : [...subset].sort(byRank)[0];
     }
@@ -297,8 +300,8 @@ function hydrate(db: DB, rows: any[], why?: Map<number, Scored>, mutedNames: str
       sourceCount: unmuted.length ? publishers(unmuted) : r.source_count, mutedSources: unmuted.length ? publishers(list.filter(isMuted)) : 0, // nothing unmuted to prefer: show the real coverage
       isRead: !!r.read_at, isUpdated: !!r.read_at && (r.substantive_at ?? 0) > r.read_at, bookmarked: !!r.bookmarked, rating: r.rating,
       imageUrl: prim?.image_url ?? null,
-      primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator', access: accessInfo(prim.article_access, prim.source_access) } : null,
-      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [], muted: isMuted(a), access: accessInfo(a.article_access, a.source_access) })),
+      primary: prim ? { publisher: prim.publisher, url: prim.url, aggregated: prim.kind === 'aggregator', access: accessInfo(prim.article_access, prim.source_access, dom(prim)) } : null,
+      articles: list.map((a) => ({ id: a.id, publisher: a.publisher, title: a.title, url: a.url, publishedAt: a.published_at, aggregated: a.kind === 'aggregator', alsoVia: via.get(a.id) ?? [], muted: isMuted(a), access: accessInfo(a.article_access, a.source_access, dom(a)) })),
       blockedBy: list.length && list.every((a) => blockedArticles.has(a.id)) ? [...new Set(list.flatMap((a) => blockedArticles.get(a.id)!))] : [],
       ...(w ? { why: { score: w.score, parts: w.parts as any, reasons: w.reasons, bucket: w.bucket } } : {}),
     };

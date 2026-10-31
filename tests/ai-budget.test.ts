@@ -116,7 +116,7 @@ describe('migration 6: ai_usage.completed', () => {
     for (const m of MIGRATIONS.filter((x) => x.id <= 5)) { raw.exec(m.sql); raw.prepare('INSERT INTO schema_migrations VALUES (?,?,0)').run(m.id, m.name); }
     raw.prepare("INSERT INTO ai_usage (day, requests, input_tokens, output_tokens, errors) VALUES ('2026-10-01', 10, 500, 200, 3), ('2026-10-02', 2, 50, 20, 5)").run();
     raw.prepare("INSERT INTO application_settings VALUES ('keep','1')").run();
-    expect(migrate(raw as DB)).toEqual([6, 7, 8, 9, 10]);
+    expect(migrate(raw as DB)).toEqual([6, 7, 8, 9, 10, 11]);
     expect(raw.prepare('SELECT day, requests, completed, errors, input_tokens, output_tokens FROM ai_usage ORDER BY day').all()).toEqual([
       { day: '2026-10-01', requests: 10, completed: 7, errors: 3, input_tokens: 500, output_tokens: 200 }, { day: '2026-10-02', requests: 2, completed: 0, errors: 5, input_tokens: 50, output_tokens: 20 }]); // never negative
     expect(raw.prepare("SELECT value FROM application_settings WHERE key = 'keep'").get()).toEqual({ value: '1' });

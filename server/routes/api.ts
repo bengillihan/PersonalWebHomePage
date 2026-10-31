@@ -13,6 +13,7 @@ import { feedUrlFor, ingestSource, processNewArticles, type SourceRow } from '..
 import { discoverFeeds, probeFeed } from '../news/discover.js';
 import { FetchError, normalizeUserUrl, validateUrl } from '../net/safeFetch.js';
 import { ACCESS_LEVELS } from '../news/access.js';
+import { hostOf } from '../news/domain-access.js';
 import { explainStory, queryFeed, queryFrontPage } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics, LEGACY_WEIGHT, priorityForWeight } from '../news/topics.js';
@@ -29,7 +30,15 @@ const prio = z.enum(['high', 'normal', 'low']).transform((p) => ({ high: 2, norm
 const prioOut = (n: number) => (['low', 'normal', 'high'] as const)[n];
 const kw = z.array(z.string().trim().min(1).max(60)).max(30);
 
-function sourceDto(s: any) {
+/** What the automatic domain check found for this source's own domain (shown beside the Access setting; the setting itself always wins). */
+function detectedAccess(db: DB, s: any) {
+  const d = s.kind === 'rss' ? hostOf(s.feed_url ?? s.site_url) ?? hostOf(s.site_url) : null; if (!d) return null;
+  const sites = [hostOf(s.site_url), d].filter((x): x is string => Boolean(x));
+  const r = db.prepare(`SELECT level, evidence, checked_at FROM domain_access WHERE domain IN (${sites.map(() => '?').join(',')}) AND level != 'unknown' ORDER BY checked_at DESC LIMIT 1`).get(...sites) as { level: string; evidence: string; checked_at: number } | undefined;
+  return r ? { level: r.level, evidence: r.evidence, checkedAt: r.checked_at } : null;
+}
+
+function sourceDto(s: any, db: DB) {
   const feed = feedUrlFor(s);
   const ev = evaluateSource(s); // evaluated now from stored columns: no network, and correct even if no check ran recently
   return {
@@ -37,7 +46,7 @@ function sourceDto(s: any) {
     aggregatorLabel: s.kind === 'aggregator' ? `Aggregated via Google News: domain-restricted search "${s.aggregator_query}" (keyword-based, not the publisher's own section feed); links open through Google News` : null,
     priority: prioOut(s.priority), enabled: !!s.enabled, coverage: s.coverage, categories: JSON.parse(s.categories), isLocal: !!s.is_local,
     health: ev.status, statusReason: ev.status === 'stale' ? ev.reason : null, freshnessHours: s.freshness_hours ?? null, freshnessDefaultHours: ev.defaultHours, lastCheckedAt: s.last_checked_at, lastSuccessAt: s.last_success_at, lastItemAt: s.last_item_at, lastError: s.last_error,
-    articleCount: s.article_count ?? 0, access: s.access ?? 'unknown',
+    articleCount: s.article_count ?? 0, access: s.access ?? 'unknown', detectedAccess: detectedAccess(db, s),
   };
 }
 
@@ -125,7 +134,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   app.post('/api/clusters/merge', async (req) => ({ clusterId: mergeClusters(db, z.object({ ids: z.array(z.number().int()).min(2).max(10) }).parse(req.body).ids) }));
 
   // ---- sources ----
-  const listSources = () => (db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM articles a WHERE a.source_id = s.id) AS article_count FROM sources s ORDER BY s.priority DESC, s.name`).all() as any[]).map(sourceDto);
+  const listSources = () => (db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM articles a WHERE a.source_id = s.id) AS article_count FROM sources s ORDER BY s.priority DESC, s.name`).all() as any[]).map((s) => sourceDto(s, db));
   app.get('/api/sources', async () => listSources());
   app.post('/api/sources/discover', medium, async (req) => discoverFeeds(z.object({ url: z.string().max(500) }).parse(req.body).url, d.fetchOpts));
   app.post('/api/sources', medium, async (req, reply) => {

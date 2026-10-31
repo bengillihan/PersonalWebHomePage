@@ -11,7 +11,7 @@ const HEADLINE: Record<CardVariant, string> = { card: 'text-lg font-semibold lea
 const ACCESS_STYLE: Record<string, string> = { free: '!bg-emerald-100 !text-emerald-800 dark:!bg-emerald-900/40 dark:!text-emerald-200', metered: '!bg-amber-100 !text-amber-800 dark:!bg-amber-900/40 dark:!text-amber-200', paywalled: '!bg-rose-100 !text-rose-800 dark:!bg-rose-900/40 dark:!text-rose-200' };
 function AccessChip({ access }: { access?: AccessInfo }) {
   if (!access?.label) return null;
-  return <span className={`chip whitespace-nowrap ${ACCESS_STYLE[access.level] ?? ''}`} title={access.basis === 'article' ? 'Stated by the article\u2019s own feed metadata' : 'An estimate from your setting for this publisher (Settings \u2192 Sources \u2192 Access)'}>{access.label}</span>;
+  return <span className={`chip whitespace-nowrap ${ACCESS_STYLE[access.level] ?? ''}`} title={access.basis === 'article' ? 'Stated by the article\u2019s own feed metadata' : access.basis === 'domain' ? 'An estimate from an automatic check of this publisher\u2019s article pages' : 'An estimate from your setting for this publisher (Settings \u2192 Sources \u2192 Access)'}>{access.label}</span>;
 }
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
   <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={d} /></svg>

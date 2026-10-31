@@ -316,4 +316,22 @@ CREATE TABLE novelty_checks (
 CREATE INDEX idx_novelty_checks_pending ON novelty_checks(status, next_attempt_at);
 `,
   },
+  {
+    id: 11,
+    name: 'domain_access',
+    // What an automatic check of a publisher's own article pages found about access, one row per domain (no Gemini, no per-article state). It is only an
+    // ESTIMATE: it ranks below an article's own feed metadata and below a source's access setting. Additive.
+    sql: `
+CREATE TABLE domain_access (
+  domain TEXT PRIMARY KEY,
+  level TEXT NOT NULL CHECK (level IN ('free','metered','paywalled','unknown')),
+  evidence TEXT NOT NULL DEFAULT '',
+  pages_checked INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  checked_at INTEGER NOT NULL,
+  next_check_at INTEGER NOT NULL
+);
+CREATE INDEX idx_domain_access_due ON domain_access(next_check_at);
+`,
+  },
 ];

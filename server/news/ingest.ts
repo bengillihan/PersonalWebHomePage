@@ -7,6 +7,7 @@ import { getPrefs } from '../settings.js';
 import { cleanAggregatorItem, googleNewsFeedUrl, itemOnDomain, parseFeed, type FeedItem } from './feed.js';
 import { refreshHealth } from './health.js';
 import { canonicalizeUrl, normalizeTitle, sha1, sha256 } from './normalize.js';
+import { runDomainChecks } from './domain-access.js';
 import { clusterArticles, clusterContentHash, isUsableSummary, judgeJoin, recomputeCluster } from './cluster.js';
 import { expireChecksFor, rehashChecksFor } from './novelty-checks.js';
 import { indexArticleTopics, loadTopics } from './topics.js';
@@ -19,7 +20,7 @@ export interface SourceRow {
 }
 export interface RefreshStats { sources: number; ok: number; failed: number; newArticles: number; aiSummarized: number; clusters: number; durationMs: number }
 
-export interface IngestDeps { db: DB; ai: Ai | null; log: { info: (o: any, m?: string) => void; warn: (o: any, m?: string) => void; error: (o: any, m?: string) => void }; fetchOpts?: { allowPrivate?: boolean } }
+export interface IngestDeps { db: DB; ai: Ai | null; log: { info: (o: any, m?: string) => void; warn: (o: any, m?: string) => void; error: (o: any, m?: string) => void }; fetchOpts?: { allowPrivate?: boolean }; /** Check publisher domains for paywalls after a refresh (see domain-access.ts). Off unless asked for, so tests never go to the network. */ domainAccess?: boolean }
 
 export function feedUrlFor(s: SourceRow): string | null {
   return s.kind === 'aggregator' && s.aggregator_query ? googleNewsFeedUrl(s.aggregator_query) : s.feed_url;
@@ -319,6 +320,7 @@ export class Refresher {
       });
       stage = 'process';
       const { ai, clusters } = await processNewArticles(this.deps, [...new Set(ids)]);
+      if (this.deps.domainAccess) { stage = 'domains'; await runDomainChecks(db, this.deps.fetchOpts).catch((e) => log.warn({ err: String(e?.message ?? e) }, 'domain access check failed')); } // a few publisher domains per refresh; never fails the refresh
       const lastPrune = getSetting<number>(db, 'last_prune_at', 0);
       stage = 'prune';
       if (Date.now() - lastPrune > 86_400_000) { pruneOldData(db); setSetting(db, 'last_prune_at', Date.now()); }

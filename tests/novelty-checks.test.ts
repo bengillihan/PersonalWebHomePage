@@ -187,7 +187,7 @@ describe('migration 10', () => {
     raw.prepare("INSERT INTO articles (source_id,url,canonical_url,canonical_hash,publisher,title,title_norm,published_at,fetched_at,content_hash,availability,cluster_id) VALUES (1,'u','u','h','P','T','t',1,1,'c','headline_only',1)").run();
     raw.prepare('INSERT INTO bookmarks VALUES (1,5)').run(); raw.prepare('INSERT INTO feedback (cluster_id, rating, reason, category, created_at, updated_at) VALUES (1,1,NULL,NULL,1,1)').run(); raw.prepare('INSERT INTO reading_state (cluster_id, read_at) VALUES (1,9)').run();
     const tables = ['sources', 'articles', 'story_clusters', 'bookmarks', 'feedback', 'reading_state']; const dump = () => JSON.stringify(tables.map((t) => raw.prepare(`SELECT * FROM ${t}`).all())); const before = dump();
-    expect(migrate(raw as unknown as DB)).toEqual([10]); expect(dump()).toBe(before); expect(migrate(raw as unknown as DB)).toEqual([]);
+    expect(migrate(raw as unknown as DB)).toEqual([10, 11]); expect(dump()).toBe(before); expect(migrate(raw as unknown as DB)).toEqual([]);
     raw.prepare("INSERT INTO novelty_checks (article_id, cluster_id, article_hash, baseline, baseline_hash, event_at, created_at, updated_at) VALUES (1,1,'c','[]','x',1,1,1)").run();
     expect(() => raw.prepare("UPDATE novelty_checks SET status = 'maybe'").run()).toThrow(/CHECK/); raw.prepare('DELETE FROM story_clusters WHERE id = 1').run();
     expect((raw.prepare('SELECT COUNT(*) n FROM novelty_checks').get() as any).n).toBe(0); expect(raw.pragma('foreign_key_check')).toEqual([]);
