@@ -1,4 +1,4 @@
-import { fetchWithRetry, validateUrl } from '../net/safeFetch.js';
+import { fetchWithRetry, normalizeUserUrl, validateUrl } from '../net/safeFetch.js';
 import { assessFreshness, parseFeed, type Freshness } from './feed.js';
 
 export interface FeedCandidate { feedUrl: string; title: string; format: 'rss' | 'atom'; freshness: Freshness; itemCount: number }
@@ -27,7 +27,7 @@ export async function probeFeed(feedUrl: string, fetchOpts: { allowPrivate?: boo
 
 /** Looks for publisher-provided feeds: <link rel=alternate> first, then common paths. Never scrapes article content. */
 export async function discoverFeeds(siteInput: string, fetchOpts: { allowPrivate?: boolean } = {}): Promise<Discovery> {
-  const site = validateUrl(siteInput, fetchOpts);
+  const site = validateUrl(normalizeUserUrl(siteInput), fetchOpts);
   const rejected: Discovery['rejected'] = [];
   const urls: string[] = [];
   let siteTitle: string | null = null;

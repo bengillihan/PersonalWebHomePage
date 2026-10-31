@@ -49,6 +49,16 @@ function blockedV4(ip: string): boolean {
 }
 
 /** Parses and validates a user-supplied URL (scheme, credentials, port, literal IP hosts). */
+/**
+ * For text a person typed: "outside.com", "www.outside.com/feed" and "https://outside.com" all work. A bare domain gets https://.
+ * Anything with a real scheme (http:, ftp:, javascript:, file:...) is left alone so validateUrl() still rejects what it should; "host:8080" is a host and port, not a scheme.
+ */
+export function normalizeUserUrl(input: string): string {
+  const t = input.trim().replace(/^\/\//, '');
+  if (!t || /^[a-z][a-z0-9+.-]*:(?!\d+(\/|$))/i.test(t)) return t;
+  return 'https://' + t;
+}
+
 export function validateUrl(input: string, opts: { allowPrivate?: boolean } = {}): URL {
   let u: URL;
   try { u = new URL(input.trim()); } catch { throw new FetchError('Invalid URL', 'invalid_url'); }

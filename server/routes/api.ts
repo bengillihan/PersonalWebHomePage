@@ -11,7 +11,7 @@ import type { Ai } from '../ai/gemini.js';
 import type { Refresher } from '../news/ingest.js';
 import { feedUrlFor, ingestSource, processNewArticles, type SourceRow } from '../news/ingest.js';
 import { discoverFeeds, probeFeed } from '../news/discover.js';
-import { FetchError, validateUrl } from '../net/safeFetch.js';
+import { FetchError, normalizeUserUrl, validateUrl } from '../net/safeFetch.js';
 import { ACCESS_LEVELS } from '../news/access.js';
 import { explainStory, queryFeed, queryFrontPage } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
@@ -133,15 +133,15 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
       url: z.string().max(500), feedUrl: z.string().max(600).optional(), aggregator: z.boolean().optional(), name: z.string().trim().min(1).max(80).optional(),
       priority: prio.optional(), coverage: z.enum(['comprehensive', 'interest']).optional(), categories: kw.optional(), isLocal: z.boolean().optional(),
     }).parse(req.body);
-    const site = validateUrl(b.url, d.fetchOpts);
+    const site = validateUrl(normalizeUserUrl(b.url), d.fetchOpts);
     let feedUrl: string | null = null; let kind: 'rss' | 'aggregator' = 'rss'; let query: string | null = null; let name = b.name ?? site.hostname.replace(/^www\./, '');
     if (b.aggregator) {
       kind = 'aggregator'; const seg = site.pathname.split('/').filter(Boolean)[0]; // Google News ignores path restrictions, so a first path segment becomes a keyword
       query = `site:${site.hostname.replace(/^www\./, '')}${seg ? ' ' + seg : ''}`;
     } else {
       let cand;
-      if (b.feedUrl) { cand = await probeFeed(validateUrl(b.feedUrl, d.fetchOpts).toString(), d.fetchOpts).catch((e) => { throw new FetchError(`Feed check failed: ${e.message}`, 'bad_feed'); }); }
-      else { const disc = await discoverFeeds(b.url, d.fetchOpts); cand = disc.candidates.find((c) => c.freshness.status === 'ok');
+      if (b.feedUrl) { cand = await probeFeed(validateUrl(normalizeUserUrl(b.feedUrl), d.fetchOpts).toString(), d.fetchOpts).catch((e) => { throw new FetchError(`Feed check failed: ${e.message}`, 'bad_feed'); }); }
+      else { const disc = await discoverFeeds(site.toString(), d.fetchOpts); cand = disc.candidates.find((c) => c.freshness.status === 'ok');
         if (!cand) return reply.code(422).send({ error: 'no_working_feed', message: 'No fresh publisher RSS/Atom feed was found. You can add this site through the labeled Google News aggregator instead.', discovery: disc, aggregatorAvailable: true }); }
       if (cand.freshness.status !== 'ok') return reply.code(422).send({ error: 'stale_feed', message: `Feed is not fresh: ${cand.freshness.reason}`, aggregatorAvailable: true });
       feedUrl = cand.feedUrl; if (!b.name && cand.title) name = cand.title.slice(0, 80);

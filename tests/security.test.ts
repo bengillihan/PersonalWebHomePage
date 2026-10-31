@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
-import { isBlockedIp, validateUrl, safeFetch, fetchWithRetry } from '../server/net/safeFetch.js';
+import { isBlockedIp, normalizeUserUrl, validateUrl, safeFetch, fetchWithRetry } from '../server/net/safeFetch.js';
 import { fixtureServer, type Fixture } from './helpers.js';
 
 describe('SSRF defenses', () => {
@@ -11,6 +11,12 @@ describe('SSRF defenses', () => {
     for (const u of ['ftp://x.com/', 'file:///etc/passwd', 'javascript:alert(1)', 'not a url', 'http://user:pw@example.com/', 'http://example.com:6379/', 'http://127.0.0.1/', 'http://[::1]/', 'http://localhost/', 'http://169.254.169.254/latest/meta-data', 'http://foo.internal/'])
       expect(() => validateUrl(u), u).toThrow();
     expect(() => validateUrl('https://example.com/feed')).not.toThrow();
+  });
+  it('accepts bare domains typed by a person, with or without https://, and still rejects everything unsafe', () => {
+    for (const [typed, expected] of [['outside.com', 'https://outside.com/'], ['  Outside.com  ', 'https://outside.com/'], ['https://outside.com', 'https://outside.com/'], ['http://outside.com', 'http://outside.com/'], ['www.outside.com/feed', 'https://www.outside.com/feed'], ['//outside.com', 'https://outside.com/'], ['outside.com:443/rss', 'https://outside.com/rss']])
+      expect(validateUrl(normalizeUserUrl(typed)).toString(), typed).toBe(expected);
+    for (const u of ['ftp://x.com/', 'file:///etc/passwd', 'javascript:alert(1)', 'mailto:a@b.com', 'data:text/html,hi', 'localhost', 'localhost:80', '127.0.0.1', '169.254.169.254/latest', 'foo.internal', 'outside.com:6379', 'user:pw@example.com', 'not a url', ''])
+      expect(() => validateUrl(normalizeUserUrl(u)), u).toThrow();
   });
   it('blocks hostnames that resolve to loopback (DNS check at connect time)', async () => {
     await expect(safeFetch('http://localtest.me/')).rejects.toThrow(); // either blocked_ip or network error offline; never a response
