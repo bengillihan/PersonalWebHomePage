@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { Weather, WeatherError } from '../weather/weather.js';
+import { Weather, WeatherError, publicLabel } from '../weather/weather.js';
 
 export function registerWeather(app: FastifyInstance, weather: Weather) {
   const limited = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
@@ -10,9 +10,11 @@ export function registerWeather(app: FastifyInstance, weather: Weather) {
   };
 
   app.get('/api/weather', { config: { rateLimit: { max: (req: any) => (req.session ? 300 : 60), timeWindow: '1 minute' } } }, async (req) => {
-    const view = await weather.get(); // a visitor sees the place by name only: never the exact coordinates or ZIP code
+    // The owner's visit may refresh a stale forecast. A visitor only reads what is stored (no upstream request, no waiting) and sees the place by name:
+    // never the coordinates or the ZIP code, in the fields or in the label.
+    const view = req.session ? await weather.get() : weather.peek();
     return {
-    ...(req.session ? view : { ...view, location: { label: view.location.label, lat: null, lon: null, zip: null } }),
+    ...(req.session ? view : { ...view, location: { label: publicLabel(view.location.label), lat: null, lon: null, zip: null } }),
     attribution: [{ text: 'Weather data by Open-Meteo.com (CC BY 4.0, non-commercial use)', url: 'https://open-meteo.com/' }, { text: 'ZIP lookup by Zippopotam.us', url: 'https://www.zippopotam.us/' }],
   }; });
 

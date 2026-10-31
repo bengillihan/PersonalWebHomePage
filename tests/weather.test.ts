@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { memDb, fixtureServer, testConfig, type Fixture } from './helpers.js';
-import { Weather, parseForecast, describeWeather, DEFAULT_LOCATION, TTL_MS, type WeatherLocation } from '../server/weather/weather.js';
+import { Weather, publicLabel, parseForecast, describeWeather, DEFAULT_LOCATION, TTL_MS, type WeatherLocation } from '../server/weather/weather.js';
 import { buildApp } from '../server/app.js';
 import type { OidcClient } from '../server/auth.js';
 import type { DB } from '../server/db.js';
@@ -155,6 +155,17 @@ describe('API failures', () => {
   });
 });
 
+describe('read-only weather', () => {
+  it('publicLabel removes any ZIP code and keeps the place name', () => {
+    for (const [from, to] of [['Des Moines, WA 98198', 'Des Moines, WA'], ['Seattle, WA 98101-1234', 'Seattle, WA'], ['98198, Des Moines, WA', 'Des Moines, WA'], ['98198 Des Moines, WA', 'Des Moines, WA'], ['Des Moines, WA', 'Des Moines, WA'], ['Des Moines, Iowa', 'Des Moines, Iowa'], ['Area 12345 Test', 'Area Test']]) expect(publicLabel(from), from).toBe(to);
+  });
+  it('peek() returns only what is stored: no fetch, no waiting, even when missing or stale', async () => {
+    const w = make(); let v = w.peek(); expect(v.forecast).toBeNull(); expect(v.stale).toBe(true); expect(forecastHits()).toBe(0); await new Promise((r) => setTimeout(r, 50)); expect(forecastHits()).toBe(0);
+    await w.get(); expect(forecastHits()).toBe(1); v = w.peek(); expect(v.forecast).not.toBeNull(); expect(v.stale).toBe(false);
+    clock += TTL_MS + 1; v = w.peek(); expect(v.stale).toBe(true); expect(v.forecast).not.toBeNull(); await new Promise((r) => setTimeout(r, 50)); expect(forecastHits()).toBe(1); // stale data is shown, and still not refreshed
+  });
+});
+
 describe('weather API (authenticated)', () => {
   let app: FastifyInstance; let cookie = ''; let csrf = '';
   const oidc: OidcClient & { nonce?: string } = { authUrl: ({ state, nonce }) => `https://x/?state=${state}&nonce=${nonce}`, async exchange() { return { sub: 's', email: 'me@example.com', emailVerified: true, name: 'Me', nonce: oidc.nonce ?? null }; } };
@@ -167,6 +178,24 @@ describe('weather API (authenticated)', () => {
   });
   const call = (method: any, url: string, payload?: unknown) => app.inject({ method, url, cookies: { sid: cookie }, headers: { 'x-csrf-token': csrf }, payload: payload as any });
 
+  it('REGRESSION: a visitor gets the stored forecast only (never starts a refresh) and a place name without the ZIP code', async () => {
+    await call('PUT', '/api/weather/location', { zip: '98198' }); // the owner's lookup builds the label "Seattle, WA 98198"
+    const mine = (await call('GET', '/api/weather')).json(); expect(mine.location.label).toMatch(/98198/); expect(mine.location.zip).toBe('98198');
+    await app.close(); db = memDb(); fx.hits.length = 0; // a fresh server whose cache is empty
+    ({ app } = await buildApp(testConfig(), db, { oidc, logger: false, transport: null, fetchOpts: { allowPrivate: true }, weather: { forecastBase: fx.url, geocodeBase: fx.url, zipBase: fx.url } }));
+    db.prepare("INSERT INTO application_settings (key, value) VALUES ('weather_location', ?)").run(JSON.stringify({ label: 'Des Moines, WA 98198', lat: 47.3929, lon: -122.3129, zip: '98198' }));
+    const visit = () => app.inject({ url: '/api/weather' });
+    let r = await visit(); expect(r.statusCode).toBe(200); expect(r.json()).toMatchObject({ location: { label: 'Des Moines, WA', lat: null, lon: null, zip: null }, forecast: null, stale: true });
+    expect(JSON.stringify(r.json())).not.toMatch(/98198|47\.39|122\.31/); await new Promise((x) => setTimeout(x, 100)); expect(forecastHits()).toBe(0); // missing cache: still no upstream request
+    const r1 = await app.inject({ url: '/auth/login' }); const loc = new URL(r1.headers.location as string); oidc.nonce = loc.searchParams.get('nonce')!;
+    const r2 = await app.inject({ url: `/auth/callback?code=c&state=${loc.searchParams.get('state')}`, cookies: { oauth_tx: r1.cookies[0].value } }); cookie = r2.cookies.find((c) => c.name === 'sid')!.value;
+    csrf = (await app.inject({ url: '/api/me', cookies: { sid: cookie } })).json().csrfToken;
+    expect((await call('GET', '/api/weather')).json().forecast).not.toBeNull(); expect(forecastHits()).toBe(1); // the owner's visit fetches
+    r = await visit(); expect(r.json().forecast.days).toHaveLength(5); expect(r.json().location.label).toBe('Des Moines, WA');
+    const c = JSON.parse((db.prepare("SELECT value FROM application_settings WHERE key = 'weather_cache'").get() as any).value); c.fetchedAt = 1; db.prepare("UPDATE application_settings SET value = ? WHERE key = 'weather_cache'").run(JSON.stringify(c));
+    r = await visit(); expect(r.json()).toMatchObject({ stale: true }); expect(r.json().forecast).not.toBeNull(); await new Promise((x) => setTimeout(x, 100)); expect(forecastHits()).toBe(1); // stale: still no visitor-driven refresh
+    expect(forecastHits()).toBe(1);
+  });
   it('requires sign-in to search for or change the weather location (the forecast itself is a public read)', async () => {
     for (const [m, u] of [['GET', '/api/weather/search?q=seattle'], ['PUT', '/api/weather/location']] as const) expect((await app.inject({ method: m, url: u })).statusCode, u).toBe(401);
     await app.close();

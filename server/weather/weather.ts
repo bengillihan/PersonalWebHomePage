@@ -10,6 +10,8 @@ export interface Forecast { timezone: string; current: CurrentWeather; days: Day
 export interface WeatherView { location: WeatherLocation; forecast: Forecast | null; fetchedAt: number | null; stale: boolean; refreshing: boolean; error: string | null }
 
 /** ZIP 98198 coordinates as returned by Zippopotam.us (verified 2026-10-29); its place name there is "Seattle", the user wants Des Moines. */
+/** The place name without any ZIP code ("Des Moines, WA 98198" -> "Des Moines, WA"), for people who are not the owner. */
+export const publicLabel = (label: string): string => label.replace(/\b\d{5}(?:-\d{4})?\b/g, ' ').replace(/\s+/g, ' ').replace(/\s+,/g, ',').replace(/^[\s,]+|[\s,]+$/g, '');
 export const DEFAULT_LOCATION: WeatherLocation = { label: 'Des Moines, WA', lat: 47.3929, lon: -122.3129, zip: '98198' };
 export const TTL_MS = 60 * 60_000;
 const FAILURE_BACKOFF_MS = 5 * 60_000;
@@ -107,6 +109,12 @@ export class Weather {
       await Promise.race([this.inflight, new Promise((r) => setTimeout(r, 4000).unref())]);
       cached = this.cache(location);
     }
+    return { location, forecast: cached?.forecast ?? null, fetchedAt: cached?.fetchedAt ?? null, stale: !cached || this.now() - cached.fetchedAt > TTL_MS, refreshing: this.inflight !== null, error: this.lastError };
+  }
+
+  /** What is already stored, and nothing else: never starts a fetch and never waits for one. For read-only visitors, so only the owner's visits spend upstream requests. */
+  peek(): WeatherView {
+    const location = this.location(); const cached = this.cache(location);
     return { location, forecast: cached?.forecast ?? null, fetchedAt: cached?.fetchedAt ?? null, stale: !cached || this.now() - cached.fetchedAt > TTL_MS, refreshing: this.inflight !== null, error: this.lastError };
   }
 

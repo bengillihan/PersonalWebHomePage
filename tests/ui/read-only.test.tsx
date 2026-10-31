@@ -59,7 +59,7 @@ describe('App for a visitor who is not signed in', () => {
     for (const name of [/settings/i, /refresh/i, /sign out/i, /^saved$/i, /^unread$/i, /bookmark/i, /mark read/i]) expect(screen.queryByRole('button', { name }), String(name)).toBeNull();
     expect(screen.getByRole('note').textContent).toMatch(/read-only/i);
     fireEvent.click(screen.getByRole('tab', { name: 'Business' })); await screen.findByRole('article', { name: 'Story 20' });
-    await waitFor(() => expect(requests.some((r) => r.url === '/api/weather')).toBe(true));
+    await waitFor(() => expect(requests.some((r) => r.url === '/api/weather')).toBe(true), { timeout: 5000 }); // Weather is a lazy chunk
     const urls = requests.map((r) => r.url); expect(urls.filter((u) => /market|topics|sources|prefs|front-mix|geo|refresh|diagnostics/.test(u))).toEqual([]); // nothing private is even requested
     expect(requests.filter((r) => r.method !== 'GET')).toEqual([]);
   });
