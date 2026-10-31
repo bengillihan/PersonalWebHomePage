@@ -17,7 +17,7 @@ import { hostOf } from '../news/domain-access.js';
 import { explainStory, queryFeed, queryFrontPage } from '../news/query.js';
 import { mergeClusters, recomputeCluster, ungroupArticle } from '../news/cluster.js';
 import { reindexTopics, loadTopics, LEGACY_WEIGHT, priorityForWeight } from '../news/topics.js';
-import { DEFAULT_FRONT_MIX, DEFAULT_GEO, FRONT_KEYS, getFrontMix, getGeo, getPrefs, saveFrontMix, saveGeo, savePrefs, type FrontKey } from '../settings.js';
+import { DEFAULT_FRONT_MIX, DEFAULT_GEO, FRONT_KEYS, FRONT_SCALE, getFrontMix, getGeo, getPrefs, saveFrontMix, saveGeo, savePrefs, type FrontKey } from '../settings.js';
 import { getDbIdentity, type PersistenceReport } from '../storage.js';
 import { evaluateSource, MAX_FRESHNESS_HOURS, refreshHealth } from '../news/health.js';
 import { RANGES, MarketService, type Range } from '../market/service.js';
@@ -81,7 +81,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   });
   app.get('/api/front-mix', async () => ({ mix: getFrontMix(db), defaults: DEFAULT_FRONT_MIX }));
   app.put('/api/front-mix', async (req) => {
-    const w = z.number().int().min(0).max(5);
+    const w = z.number().int().min(0).max(FRONT_SCALE);
     const body = z.object({ weights: z.object(Object.fromEntries(FRONT_KEYS.map((k) => [k, w])) as Record<FrontKey, typeof w>), majorException: z.boolean(), majorThreshold: z.number().min(0.5).max(1) }).parse(req.body);
     saveFrontMix(db, body); return { mix: getFrontMix(db), defaults: DEFAULT_FRONT_MIX };
   });

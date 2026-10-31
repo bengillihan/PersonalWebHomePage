@@ -6,7 +6,7 @@ import { byRank, isUsableSummary } from './cluster.js';
 import { accessInfo, accessTier, type AccessInfo } from './access.js';
 import { domainLevels, hostOf } from './domain-access.js';
 import { classify, isSection, SECTION_LABEL, LOCAL_PRIORITY_BOOST, type Section } from './sections.js';
-import { FRONT_KEYS, getFrontMix, getGeo, type FrontKey } from '../settings.js';
+import { FRONT_KEYS, FRONT_SCALE, getFrontMix, getGeo, type FrontKey } from '../settings.js';
 
 export interface FeedQuery { tab: string; q?: string; topic?: string; cursor?: string; limit?: number }
 export interface StoryDto {
@@ -146,7 +146,7 @@ export function queryFeed(db: DB, fq: FeedQuery): FeedPage {
 
 export interface FrontPage { lead: StoryDto | null; secondary: StoryDto[]; sections: { key: FrontKey; label: string; items: StoryDto[] }[] }
 /** secondaryPerCategory: how many of the secondary stories one category may take. quota[w]: stories a section block shows for category weight w. */
-export const FRONT = { secondary: 6, secondaryPerCategory: 2, quota: [0, 1, 2, 3, 3, 4] as readonly number[], majorFloor: 4 } as const;
+export const FRONT = { secondary: 6, secondaryPerCategory: 2, quota: [0, 1, 1, 2, 2, 3, 3, 3, 3, 4, 4] as readonly number[], majorFloor: 8 } as const;
 /**
  * A story that belongs to several categories is placed under ONE, the most specific (this order), whatever the weights are. If that category is
  * switched off (weight 0) the story is left off the Front Page: it is never handed to another category with a higher weight, so a weight of 0 can
@@ -160,7 +160,7 @@ const FRONT_LABEL = (k: FrontKey) => (k === 'other' ? 'More stories' : SECTION_L
  * The Front Page, built from ONE ranked pool (the same filters and scoring as For You) and the Front Page Mix:
  *  - every story gets one primary category (see PRIMARY_ORDER), independent of the weights; if that category's weight is 0 the story is left off the
  *    Front Page (it is still in its section, Search and Saved);
- *  - its Front Page score is its usual relevance score scaled by the category weight (weight 5 = full strength, 1 = well below), so category priority
+ *  - its Front Page score is its usual relevance score scaled by the category weight (weight 10 = full strength, 1 = well below), so category priority
  *    and story relevance/importance both count;
  *  - a story at or above the major-news importance gets a weight floor, so breaking news is not buried by a low weight (never above 0);
  *  - diversity: the secondary stories take at most `secondaryPerCategory` per category and each section block shows at most quota[weight] stories,
@@ -185,11 +185,11 @@ export function queryFrontPage(db: DB): FrontPage {
     const place = PRIMARY_ORDER.find((k) => cats.includes(k)) ?? 'other'; // the story's main category, decided WITHOUT looking at any weight
     const w = weightOf(place);
     if (w <= 0) continue; // its main category is switched off: the story stays off the page rather than moving to a category with a higher weight
-    items.push({ s, place, w, final: s.score * (0.3 + 0.7 * (w / 5)), boost: place === 'local' && cls.localPriority ? LOCAL_PRIORITY_BOOST : 0 });
+    items.push({ s, place, w, final: s.score * (0.3 + 0.7 * (w / FRONT_SCALE)), boost: place === 'local' && cls.localPriority ? LOCAL_PRIORITY_BOOST : 0 });
   }
   const byFinal = (a: P, b: P) => b.final - a.final;
   const used = new Set<number>(); const take = (p: P) => { used.add(p.s.c.id); return p; };
-  const leadScore = (p: P) => (0.3 + 0.7 * (p.w / 5)) * (p.s.score * 0.6 + p.s.parts.importance * 0.4); // relevance and importance, both scaled by the category weight
+  const leadScore = (p: P) => (0.3 + 0.7 * (p.w / FRONT_SCALE)) * (p.s.score * 0.6 + p.s.parts.importance * 0.4); // relevance and importance, both scaled by the category weight
   const lead = [...items].sort((a, b) => leadScore(b) - leadScore(a)).slice(0, 1).map(take);
   const perCat = new Map<FrontKey, number>(); const secondary: P[] = [];
   for (const p of [...items].sort(byFinal)) {

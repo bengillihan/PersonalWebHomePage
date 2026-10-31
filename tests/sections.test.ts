@@ -80,7 +80,7 @@ describe('Washington now includes the Greater Seattle area', () => {
   });
   it('a saved Front Page Mix keeps its Washington weight and ignores the old Regional one', () => {
     setSetting(db, 'front_mix', { weights: { regional: 5, washington: 1, local: 3 }, majorException: true, majorThreshold: 0.8 });
-    const m = getFrontMix(db); expect(m.weights).not.toHaveProperty('regional'); expect(m.weights).toMatchObject({ washington: 1, local: 3, theology: 2 });
+    const m = getFrontMix(db); expect(m.weights).not.toHaveProperty('regional'); expect(m.weights).toMatchObject({ washington: 2, local: 6, theology: 4 }); // saved on the old 0-5 scale: doubled
   });
 });
 

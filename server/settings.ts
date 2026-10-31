@@ -66,17 +66,20 @@ export function saveGeo(db: DB, geo: GeoPrefs): void { setSetting(db, 'geo', geo
  * unaffected). Separate from article-interest weights and Show more / Show less. Stored in SQLite so it follows the account across devices.
  */
 export const FRONT_KEYS = ['local', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors', 'theology', 'other'] as const;
+/** The Front Page Mix sliders run 0 (off the Front Page) to FRONT_SCALE. */
+export const FRONT_SCALE = 10;
 export type FrontKey = (typeof FRONT_KEYS)[number];
 export interface FrontMix { weights: Record<FrontKey, number>; majorException: boolean; majorThreshold: number }
 export const DEFAULT_FRONT_MIX: FrontMix = {
-  weights: { local: 5, washington: 4, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, theology: 2, other: 2 },
+  weights: { local: 10, washington: 8, us: 8, world: 8, politics: 4, business: 10, technology: 10, sports: 4, outdoors: 6, theology: 4, other: 4 },
   majorException: true, majorThreshold: 0.8,
 };
 export function getFrontMix(db: DB): FrontMix {
   const s = getSetting<Partial<FrontMix> & { weights?: Partial<Record<FrontKey, number>> }>(db, 'front_mix', {});
   const weights = { ...DEFAULT_FRONT_MIX.weights };
-  for (const k of FRONT_KEYS) { const v = s.weights?.[k]; if (Number.isInteger(v) && v! >= 0 && v! <= 5) weights[k] = v!; }
+  const legacy = (s as { scale?: number }).scale !== FRONT_SCALE; // saved when the sliders ran 0-5: the same choice on the 0-10 scale is double
+  for (const k of FRONT_KEYS) { const v = s.weights?.[k]; if (Number.isInteger(v) && v! >= 0 && v! <= (legacy ? 5 : FRONT_SCALE)) weights[k] = legacy ? v! * 2 : v!; }
   const t = s.majorThreshold;
   return { weights, majorException: typeof s.majorException === 'boolean' ? s.majorException : DEFAULT_FRONT_MIX.majorException, majorThreshold: typeof t === 'number' && t >= 0.5 && t <= 1 ? t : DEFAULT_FRONT_MIX.majorThreshold };
 }
-export function saveFrontMix(db: DB, mix: FrontMix): void { setSetting(db, 'front_mix', mix); }
+export function saveFrontMix(db: DB, mix: FrontMix): void { setSetting(db, 'front_mix', { ...mix, scale: FRONT_SCALE }); }

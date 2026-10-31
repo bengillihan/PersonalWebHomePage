@@ -60,7 +60,7 @@ describe('Politics classification', () => {
 
 describe('Front Page Mix', () => {
   it('has the suggested defaults and keeps them when nothing is saved', () => {
-    expect(getFrontMix(db)).toEqual({ weights: { local: 5, washington: 4, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, theology: 2, other: 2 }, majorException: true, majorThreshold: 0.8 });
+    expect(getFrontMix(db)).toEqual({ weights: { local: 10, washington: 8, us: 8, world: 8, politics: 4, business: 10, technology: 10, sports: 4, outdoors: 6, theology: 4, other: 4 }, majorException: true, majorThreshold: 0.8 });
   });
   it('REGRESSION: weight 0 removes a category from the Front Page only; its section, Search and Saved still have it', () => {
     const s = src('General'); const sp = story(s, 'Seahawks edge 49ers in overtime', { ai: 'Sports' }), bz = story(s, 'Chipmaker shares jump', { ai: 'Business' });
@@ -85,7 +85,7 @@ describe('Front Page Mix', () => {
     const s = src('General'); for (let i = 0; i < 30; i++) story(s, `Chipmaker story ${i}`, { ai: 'Business', importance: 0.7, ageMin: 5 + i });
     for (let i = 0; i < 3; i++) story(s, `Kent school story ${i}`, { importance: 0.3, ageMin: 600 + i }); story(s, 'Mariners sign veteran starter', { ai: 'Sports', importance: 0.3, ageMin: 700 });
     const fp = queryFrontPage(db); const biz = fp.sections.find((b) => b.key === 'business')?.items.length ?? 0; const bizTop = [fp.lead, ...fp.secondary].filter((x) => x && /Chipmaker/.test(x.title)).length;
-    expect(biz).toBeLessThanOrEqual(FRONT.quota[5]); expect(bizTop - 1).toBeLessThanOrEqual(FRONT.secondaryPerCategory); // the lead may be one; secondary stories are capped
+    expect(biz).toBeLessThanOrEqual(FRONT.quota[10]); expect(bizTop - 1).toBeLessThanOrEqual(FRONT.secondaryPerCategory); // the lead may be one; secondary stories are capped
     const titles = [fp.lead, ...fp.secondary, ...fp.sections.flatMap((b) => b.items)].map((x) => x!.title); expect(titles.some((t) => /Kent school/.test(t))).toBe(true); expect(titles.some((t) => /Mariners/.test(t))).toBe(true); // the quieter categories still appear
   });
   it('category priority counts alongside relevance: at equal relevance the heavier category leads', () => {
@@ -95,7 +95,7 @@ describe('Front Page Mix', () => {
   it('REGRESSION: a major breaking story gets through a low weight; the exception never beats weight 0 or a blocked topic', () => {
     const s = src('General'); const big = story(s, 'Seahawks stun 49ers in Super Bowl overtime', { ai: 'Sports', importance: 0.95 }), minor = story(s, 'Mariners sign veteran starter', { ai: 'Sports', importance: 0.3 }); story(s, 'Chipmaker shares jump', { ai: 'Business', importance: 0.5 });
     mix({ sports: 1 }, { majorException: false }); expect(where(queryFrontPage(db), big)).not.toBe('lead'); // low weight, no exception
-    mix({ sports: 1 }, { majorException: true }); expect(where(queryFrontPage(db), big)).toBe('lead'); // major: treated as at least weight 4
+    mix({ sports: 1 }, { majorException: true }); expect(where(queryFrontPage(db), big)).toBe('lead'); // major: treated as at least weight 8
     expect(where(queryFrontPage(db), minor)).not.toBeNull(); // minor story keeps its low weight
     mix({ sports: 0 }, { majorException: true }); expect(all(queryFrontPage(db))).not.toContain(big); // explicit 0 wins
     mix({ sports: 3 }, { majorException: true, majorThreshold: 1 }); expect(getFrontMix(db).majorThreshold).toBe(1);
@@ -121,8 +121,8 @@ describe('Front Page Mix', () => {
     const s = src('General'); const sp = story(s, 'Seahawks edge 49ers', { ai: 'Sports' }); expect(all(queryFrontPage(db))).toContain(sp); mix({ sports: 0 }); expect(all(queryFrontPage(db))).not.toContain(sp); mix(); expect(all(queryFrontPage(db))).toContain(sp);
   });
   it('invalid stored values fall back to the defaults instead of breaking the page', () => {
-    setSetting(db, 'front_mix', { weights: { local: 9, sports: 'x', business: 0 }, majorThreshold: 3 }); const m = getFrontMix(db);
-    expect(m.weights.local).toBe(5); expect(m.weights.sports).toBe(2); expect(m.weights.business).toBe(0); expect(m.majorThreshold).toBe(0.8);
+    setSetting(db, 'front_mix', { scale: 10, weights: { local: 11, sports: 'x', business: 0, us: 7 }, majorThreshold: 3 }); const m = getFrontMix(db);
+    expect(m.weights.local).toBe(10); expect(m.weights.sports).toBe(4); expect(m.weights.us).toBe(7); expect(m.weights.business).toBe(0); expect(m.majorThreshold).toBe(0.8);
   });
 });
 
@@ -164,6 +164,21 @@ describe('REGRESSION: a weight of 0 never makes another story, or the same story
   });
 });
 
+describe('Front Page Mix 0-10 scale', () => {
+  it('a mix saved on the old 0-5 sliders keeps its meaning (doubled, 0 still off), and once saved again is read as 0-10', () => {
+    setSetting(db, 'front_mix', { weights: { local: 5, business: 3, sports: 0, us: 1 }, majorException: false, majorThreshold: 0.9 });
+    expect(getFrontMix(db).weights).toMatchObject({ local: 10, business: 6, sports: 0, us: 2, world: 8 }); expect(getFrontMix(db).majorException).toBe(false);
+    saveFrontMix(db, getFrontMix(db)); expect(getFrontMix(db).weights).toMatchObject({ local: 10, business: 6, sports: 0, us: 2 }); // not doubled again
+    expect(JSON.parse((db.prepare("SELECT value FROM application_settings WHERE key = 'front_mix'").get() as any).value).scale).toBe(10);
+  });
+  it('every step from 1 to 10 is accepted and changes the ranking: a higher weight never ranks a category lower', () => {
+    const s = src('General'); const sp = story(s, 'Seahawks edge 49ers in overtime', { ai: 'Sports', importance: 0.5, ageMin: 30 }); for (let i = 0; i < 4; i++) story(s, `Chipmaker story ${i}`, { ai: 'Business', importance: 0.5, ageMin: 30 + i });
+    const rank = (w: number) => { mix({ sports: w }); const fp = queryFrontPage(db); return fp.lead?.id === sp ? 0 : (fp.secondary.findIndex((x) => x.id === sp) + 1) || 99; };
+    const ranks = Array.from({ length: 10 }, (_, i) => rank(i + 1)); for (let i = 1; i < ranks.length; i++) expect(ranks[i]).toBeLessThanOrEqual(ranks[i - 1]);
+    for (let w = 1; w <= 10; w++) { mix({ sports: w }); expect(getFrontMix(db).weights.sports).toBe(w); }
+  });
+});
+
 describe('Front Page Mix API', () => {
   let app: FastifyInstance; let cookie = ''; let csrf = '';
   const oidc: OidcClient & { nonce?: string } = { authUrl: ({ state, nonce }) => `https://x/?state=${state}&nonce=${nonce}`, async exchange() { return { sub: 's', email: 'me@example.com', emailVerified: true, name: 'Me', nonce: oidc.nonce ?? null }; } };
@@ -179,10 +194,10 @@ describe('Front Page Mix API', () => {
   it('reads, saves (in SQLite), validates and resets the mix', async () => {
     expect((await app.inject({ url: '/api/front-mix' })).statusCode).toBe(401);
     const g = (await call('GET', '/api/front-mix')).json(); expect(g.mix).toEqual(DEFAULT_FRONT_MIX); expect(g.defaults).toEqual(DEFAULT_FRONT_MIX);
-    const next = { ...g.mix, weights: { ...g.mix.weights, politics: 0, sports: 5 }, majorThreshold: 0.9 };
-    expect((await call('PUT', '/api/front-mix', next)).json().mix.weights).toMatchObject({ politics: 0, sports: 5 });
+    const next = { ...g.mix, weights: { ...g.mix.weights, politics: 0, sports: 9 }, majorThreshold: 0.9 };
+    expect((await call('PUT', '/api/front-mix', next)).json().mix.weights).toMatchObject({ politics: 0, sports: 9 });
     expect(JSON.parse((db.prepare("SELECT value FROM application_settings WHERE key = 'front_mix'").get() as any).value).weights.politics).toBe(0); // follows the account, stored server-side
-    for (const bad of [{ ...next, weights: { ...next.weights, local: 6 } }, { ...next, weights: { ...next.weights, local: 2.5 } }, { ...next, weights: { ...next.weights, local: -1 } }, { ...next, majorThreshold: 0.2 }, { ...next, weights: { local: 1 } }]) expect((await call('PUT', '/api/front-mix', bad)).statusCode).toBe(400);
+    for (const bad of [{ ...next, weights: { ...next.weights, local: 11 } }, { ...next, weights: { ...next.weights, local: 2.5 } }, { ...next, weights: { ...next.weights, local: -1 } }, { ...next, majorThreshold: 0.2 }, { ...next, weights: { local: 1 } }]) expect((await call('PUT', '/api/front-mix', bad)).statusCode).toBe(400);
     expect((await call('PUT', '/api/front-mix', g.defaults)).json().mix).toEqual(DEFAULT_FRONT_MIX);
   });
   it('the front page endpoint uses the saved mix and makes no Gemini request', async () => {

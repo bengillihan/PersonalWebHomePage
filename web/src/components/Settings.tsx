@@ -229,14 +229,14 @@ function FrontMixPanel({ onChanged }: { onChanged: () => void }) {
   const save = async (body: FrontMix) => { try { await api('/api/front-mix', { method: 'PUT', body }); setErr(null); setSaved(true); setTimeout(() => setSaved(false), 1500); await reload(); onChanged(); } catch (e) { setErr((e as Error).message); } };
   return (
     <div className="space-y-5">
-      <div><h3 className="text-base font-semibold">Front Page Mix</h3><p className="text-sm text-slate-500">How much each category matters on the Front Page, from 0 to 5. It works alongside each story’s own relevance and importance, and no category can fill the page. <b>0 leaves the category off the Front Page only</b>: its own tab, Search and Saved are unaffected. This is separate from your interest weights and Show more / Show less. Changes apply immediately, from stories already stored.</p></div>
+      <div><h3 className="text-base font-semibold">Front Page Mix</h3><p className="text-sm text-slate-500">How much each category matters on the Front Page, from 0 to 10. It works alongside each story’s own relevance and importance, and no category can fill the page. <b>0 leaves the category off the Front Page only</b>: its own tab, Search and Saved are unaffected. This is separate from your interest weights and Show more / Show less. Changes apply immediately, from stories already stored.</p></div>
       <div className="card space-y-3 p-4">
         {MIX_FIELDS.map(([k, label, hint]) => (
           <div key={k}>
             <div className="grid grid-cols-[5.5rem_1fr_6.5rem] items-center gap-x-3 sm:grid-cols-[8rem_1fr_9rem]">
               <label htmlFor={`mix-${k}`} className="text-sm font-medium">{label}</label>
-              <input id={`mix-${k}`} type="range" min={0} max={5} step={1} value={m.weights[k]} aria-valuetext={m.weights[k] === 0 ? 'off the Front Page' : `${m.weights[k]} of 5`} onChange={(e) => setM({ ...m, weights: { ...m.weights, [k]: Number(e.target.value) } })} className="w-full accent-indigo-600" />
-              <span className={`text-right text-xs tabular-nums sm:text-sm ${m.weights[k] === 0 ? 'text-amber-700 dark:text-amber-300' : ''}`}>{m.weights[k] === 0 ? 'Off Front Page' : `${m.weights[k]} of 5`}</span>
+              <input id={`mix-${k}`} type="range" min={0} max={10} step={1} value={m.weights[k]} aria-valuetext={m.weights[k] === 0 ? 'off the Front Page' : `${m.weights[k]} of 10`} onChange={(e) => setM({ ...m, weights: { ...m.weights, [k]: Number(e.target.value) } })} className="w-full accent-indigo-600" />
+              <span className={`text-right text-xs tabular-nums sm:text-sm ${m.weights[k] === 0 ? 'text-amber-700 dark:text-amber-300' : ''}`}>{m.weights[k] === 0 ? 'Off Front Page' : `${m.weights[k]} of 10`}</span>
             </div>
             <p className="text-xs text-slate-500">{hint}</p>
           </div>
@@ -244,7 +244,7 @@ function FrontMixPanel({ onChanged }: { onChanged: () => void }) {
       </div>
       <div className="card space-y-2 p-4">
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={m.majorException} onChange={(e) => setM({ ...m, majorException: e.target.checked })} />
-          <span><b>Let major breaking stories through low weights.</b> A story at or above the importance below is treated as at least weight 4 in its category. It never overrides a weight of 0 or a blocked topic.</span></label>
+          <span><b>Let major breaking stories through low weights.</b> A story at or above the importance below is treated as at least weight 8 in its category. It never overrides a weight of 0 or a blocked topic.</span></label>
         <label className="flex items-center gap-2 pl-6 text-sm">Major story importance
           <select className="input !w-auto !py-1" disabled={!m.majorException} value={m.majorThreshold} onChange={(e) => setM({ ...m, majorThreshold: Number(e.target.value) })}>{[0.6, 0.7, 0.8, 0.9].map((v) => <option key={v} value={v}>{Math.round(v * 100)}%</option>)}</select></label>
       </div>

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import Settings from '../../web/src/components/Settings';
 
-const DEFAULTS = { weights: { local: 5, washington: 4, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, theology: 2, other: 2 }, majorException: true, majorThreshold: 0.8 };
+const DEFAULTS = { weights: { local: 10, washington: 8, us: 8, world: 8, politics: 4, business: 10, technology: 10, sports: 4, outdoors: 6, theology: 4, other: 4 }, majorException: true, majorThreshold: 0.8 };
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } });
 let puts: any[]; let stored: typeof DEFAULTS;
 beforeEach(() => {
@@ -19,10 +19,10 @@ const mount = () => render(<Settings panel="frontmix" setPanel={() => {}} onClos
 const slider = (name: string) => screen.getByRole('slider', { name }) as HTMLInputElement;
 
 describe('Settings → Front Page Mix', () => {
-  it('lists every category as a 0-5 slider starting at the defaults, and is reachable from the Settings menu', async () => {
+  it('lists every category as a 0-10 slider starting at the defaults, and is reachable from the Settings menu', async () => {
     mount(); await screen.findByRole('slider', { name: 'Local' });
-    expect(screen.getAllByRole('slider').map((s) => (s as HTMLInputElement).value)).toEqual(['5', '4', '4', '4', '2', '5', '5', '2', '3', '2', '2']);
-    expect(screen.getAllByRole('slider').map((s) => [s.getAttribute('min'), s.getAttribute('max')])[0]).toEqual(['0', '5']);
+    expect(screen.getAllByRole('slider').map((s) => (s as HTMLInputElement).value)).toEqual(['10', '8', '8', '8', '4', '10', '10', '4', '6', '4', '4']);
+    expect(screen.getAllByRole('slider').map((s) => [s.getAttribute('min'), s.getAttribute('max')])[0]).toEqual(['0', '10']);
     expect(screen.getByRole('button', { name: 'Front Page Mix' })).toBeTruthy();
   });
   it('explains that 0 only leaves the Front Page, and labels a zero weight', async () => {
@@ -31,12 +31,12 @@ describe('Settings → Front Page Mix', () => {
   });
   it('saves exactly what was set (including the major-story exception) and reports success', async () => {
     mount(); await screen.findByRole('slider', { name: 'Politics' });
-    fireEvent.change(slider('Politics'), { target: { value: '5' } }); fireEvent.click(screen.getByRole('checkbox')); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(puts).toHaveLength(1)); expect(puts[0].weights.politics).toBe(5); expect(puts[0].majorException).toBe(false); expect(puts[0].weights.local).toBe(5); expect(await screen.findByRole('status')).toBeTruthy();
+    fireEvent.change(slider('Politics'), { target: { value: '9' } }); fireEvent.click(screen.getByRole('checkbox')); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(puts).toHaveLength(1)); expect(puts[0].weights.politics).toBe(9); expect(puts[0].majorException).toBe(false); expect(puts[0].weights.local).toBe(10); expect(await screen.findByRole('status')).toBeTruthy();
   });
   it('resets to the defaults in one click', async () => {
     stored = { ...structuredClone(DEFAULTS), weights: { ...DEFAULTS.weights, local: 0, business: 1 } }; mount(); await screen.findByRole('slider', { name: 'Local' }); expect(slider('Local').value).toBe('0');
-    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' })); await waitFor(() => expect(puts).toHaveLength(1)); expect(puts[0]).toEqual(DEFAULTS); await waitFor(() => expect(slider('Local').value).toBe('5'));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' })); await waitFor(() => expect(puts).toHaveLength(1)); expect(puts[0]).toEqual(DEFAULTS); await waitFor(() => expect(slider('Local').value).toBe('10'));
   });
   it('the major-story threshold is only editable while the exception is on', async () => {
     mount(); const select = (await screen.findByRole('combobox')) as HTMLSelectElement; expect(select.disabled).toBe(false); fireEvent.click(screen.getByRole('checkbox')); expect(select.disabled).toBe(true);
