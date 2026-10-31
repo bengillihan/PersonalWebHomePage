@@ -131,11 +131,11 @@ describe('discovery + seeds', () => {
   it('seeds are idempotent and a deleted seed is not resurrected', () => {
     const db = memDb();
     seedDefaults(db); seedDefaults(db);
-    expect((db.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(4);
+    expect((db.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(7);
     expect((db.prepare('SELECT COUNT(*) n FROM watchlist').get() as any).n).toBe(6);
     expect((db.prepare("SELECT kind FROM sources WHERE seed_key='mynorthwest'").get() as any).kind).toBe('aggregator');
     db.prepare("DELETE FROM sources WHERE seed_key='bbc-news'").run();
     seedDefaults(db);
-    expect((db.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(3);
+    expect((db.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(6);
   });
 });

@@ -152,7 +152,7 @@ export const FRONT = { secondary: 6, secondaryPerCategory: 2, quota: [0, 1, 2, 3
  * never make a story more prominent. Municipal and local-infrastructure stories are placed by their place (Local/Regional/Washington) before
  * Politics, and Business/Technology stories keep their topic even when they mention legislation (Politics needs a political main event).
  */
-const PRIMARY_ORDER: FrontKey[] = ['local', 'regional', 'washington', 'politics', 'business', 'technology', 'sports', 'us', 'world', 'other'];
+const PRIMARY_ORDER: FrontKey[] = ['local', 'regional', 'washington', 'politics', 'business', 'technology', 'outdoors', 'sports', 'us', 'world', 'other'];
 const FRONT_LABEL = (k: FrontKey) => (k === 'other' ? 'More stories' : SECTION_LABEL[k]);
 
 /**

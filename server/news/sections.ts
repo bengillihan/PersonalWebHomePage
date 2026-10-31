@@ -8,10 +8,10 @@ import type { GeoPrefs } from '../settings.js';
  *    in Settings -> Geography (and the AI category 'Local' / 'Regional' / 'Washington' when it says so).
  * A story may belong to several sections. Pure functions: no database, no network.
  */
-export const SECTIONS = ['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports'] as const;
+export const SECTIONS = ['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors'] as const;
 export type Section = (typeof SECTIONS)[number];
 export const isSection = (s: string): s is Section => (SECTIONS as readonly string[]).includes(s);
-export const SECTION_LABEL: Record<Section, string> = { local: 'Local', regional: 'Regional', washington: 'Washington', us: 'U.S.', world: 'World', politics: 'Politics', business: 'Business', technology: 'Technology', sports: 'Sports' };
+export const SECTION_LABEL: Record<Section, string> = { local: 'Local', regional: 'Regional', washington: 'Washington', us: 'U.S.', world: 'World', politics: 'Politics', business: 'Business', technology: 'Technology', sports: 'Sports', outdoors: 'Outdoors' };
 /** How far a story from the user's closest places (e.g. Des Moines, Federal Way) is lifted within Local. */
 export const LOCAL_PRIORITY_BOOST = 0.5;
 
@@ -20,7 +20,18 @@ const CATEGORY: Record<Section, string[]> = {
   us: ['politics', 'u.s.', 'us', 'national'], world: ['world', 'international'], politics: ['politics'],
   business: ['business', 'economy', 'finance', 'markets', 'energy', 'industry', 'companies'],
   technology: ['technology', 'tech', 'ai', 'cybersecurity', 'science & technology'], sports: ['sports'],
+  outdoors: ['outdoors', 'outdoor', 'hiking', 'outdoor recreation', 'outdoor sports', 'travel & outdoors'],
 };
+/**
+ * Hiking and outdoor-sports subjects named in the HEADLINE. Gemini's 'Outdoors' always counts; this catches stories it files under Sports, Health, Travel
+ * or Other. Specific words only ("trail" alone would match the Trail Blazers and a paper trail), and Business / Technology / Politics stories keep their topic.
+ */
+const OUTDOORS = /\b(hik(?:e|es|ed|er|ers|ing)|backpack(?:ing|er|ers)|thru-?hik\w*|trailheads?|campsites?|campgrounds?|camping|mountaineer\w*|rock climb\w*|climbers?|trail running|trail runners?|ultramarathons?|kayak\w*|canoe\w*|paddleboard\w*|whitewater|backcountry|national parks?|wilderness|bikepacking|(?:Appalachian|Pacific Crest|Continental Divide) Trail|PCT|Cascades|Mount Rainier|Olympic Mountains|Mount Si)\b/i;
+const NOT_OUTDOORS_CATEGORY = new Set(['business', 'technology', 'tech', 'politics', 'economy', 'finance', 'markets']);
+export function isOutdoors(title: string, category: string | null): boolean {
+  const cat = (category ?? '').trim().toLowerCase();
+  return CATEGORY.outdoors.includes(cat) || (!NOT_OUTDOORS_CATEGORY.has(cat) && OUTDOORS.test(title));
+}
 const US_TERMS = ['Congress', 'White House', 'Supreme Court', 'Pentagon', 'U.S. Senate', 'the Senate', 'U.S. House', 'federal government', 'Justice Department', 'Capitol Hill', 'the president'];
 /** A following word that means the place name is somewhere else ("Des Moines, Iowa", "Kent State", "Des Moines Register"). */
 const ELSEWHERE = /^(?:,\s*)?(?:iowa|ia\b|england|ohio|kentucky|ky\b|michigan|maine|connecticut|ontario|texas|california|oregon|florida|illinois|virginia|georgia|state\b|university\b|register\b)/i;
@@ -84,5 +95,6 @@ export function classify(s: SectionInput, geo: GeoPrefs): Classified {
   if (out.has('us') && (local || regional || state) && !national) out.delete('us'); // "Politics" about the Seattle council is not national news
   if (national) out.add('us');
   if (!out.has('politics') && isPolitical(s.title, s.category)) out.add('politics');
+  if (isOutdoors(s.title, s.category)) out.add('outdoors');
   return { sections: out, localPriority: out.has('local') && mentions(text, geo.localPriority) !== null };
 }

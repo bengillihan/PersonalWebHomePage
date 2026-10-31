@@ -61,11 +61,11 @@ export function saveGeo(db: DB, geo: GeoPrefs): void { setSetting(db, 'geo', geo
  * Front Page Mix: how much each category matters on the FRONT PAGE only (0 = leave it off the Front Page; its own section, Search and Saved are
  * unaffected). Separate from article-interest weights and Show more / Show less. Stored in SQLite so it follows the account across devices.
  */
-export const FRONT_KEYS = ['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'other'] as const;
+export const FRONT_KEYS = ['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors', 'other'] as const;
 export type FrontKey = (typeof FRONT_KEYS)[number];
 export interface FrontMix { weights: Record<FrontKey, number>; majorException: boolean; majorThreshold: number }
 export const DEFAULT_FRONT_MIX: FrontMix = {
-  weights: { local: 5, regional: 4, washington: 3, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, other: 2 },
+  weights: { local: 5, regional: 4, washington: 3, us: 4, world: 4, politics: 2, business: 5, technology: 5, sports: 2, outdoors: 3, other: 2 },
   majorException: true, majorThreshold: 0.8,
 };
 export function getFrontMix(db: DB): FrontMix {

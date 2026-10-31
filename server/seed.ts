@@ -15,6 +15,10 @@ export const SEED_SOURCES: SeedSource[] = [
   // CNN's legacy RSS feeds are frozen (2018). Google News ignores path restrictions (site:cnn.com/business returned 2021 items),
   // so this is the cnn.com domain filtered by the keyword "business" - labeled as such in the UI, not the real /business section.
   { key: 'cnn-business', name: 'CNN Business', site: 'https://www.cnn.com/business', feed: null, kind: 'aggregator', query: 'site:cnn.com business', priority: 1, categories: ['Business'] },
+  // Outdoors (hiking and outdoor sports). Publisher feeds, checked live; broad coverage so every story is eligible, filed under Outdoors by the model's category and the headline.
+  { key: 'the-trek', name: 'The Trek', site: 'https://thetrek.co/', feed: 'https://thetrek.co/feed/', kind: 'rss', priority: 1, categories: ['Outdoors'] },
+  { key: 'outside', name: 'Outside', site: 'https://www.outsideonline.com/', feed: 'https://www.outsideonline.com/feed/', kind: 'rss', priority: 1, categories: ['Outdoors'] },
+  { key: 'backpacker', name: 'Backpacker', site: 'https://www.backpacker.com/', feed: 'https://www.backpacker.com/feed/', kind: 'rss', priority: 1, categories: ['Outdoors'] },
   { key: 'bbc-news', name: 'BBC News', site: 'https://www.bbc.com/news', feed: 'https://feeds.bbci.co.uk/news/rss.xml', kind: 'rss', priority: 1, categories: ['World'] },
 ];
 

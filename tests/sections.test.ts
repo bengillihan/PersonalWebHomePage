@@ -4,6 +4,7 @@ import { memDb, testConfig } from './helpers.js';
 import { recomputeCluster } from '../server/news/cluster.js';
 import { queryFeed, queryFrontPage, FRONT } from '../server/news/query.js';
 import { classify, SECTIONS } from '../server/news/sections.js';
+import { SEED_SOURCES } from '../server/seed.js';
 import { DEFAULT_GEO, getPrefs, saveGeo, savePrefs } from '../server/settings.js';
 import { setSetting } from '../server/db.js';
 import { reindexBlocks } from '../server/news/blocking.js';
@@ -65,7 +66,30 @@ describe('classification: sections follow what a story is about', () => {
     expect([...has('Seattle edges San Francisco in overtime', 'Sports')]).toEqual(['sports']);
     expect([...has('Des Moines theater festival returns', 'Entertainment')]).toEqual([]);
   });
-  it('every section key is routable', () => { expect(SECTIONS).toEqual(['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports']); });
+  it('every section key is routable', () => { expect(SECTIONS).toEqual(['local', 'regional', 'washington', 'us', 'world', 'politics', 'business', 'technology', 'sports', 'outdoors']); });
+});
+
+describe('Outdoors section', () => {
+  it('takes hiking and outdoor-sports stories by category or headline, and leaves look-alikes alone', () => {
+    expect(has('Trail closures announced', 'Outdoors').has('outdoors')).toBe(true);
+    for (const t of ['Thru-hikers face early snow on the Pacific Crest Trail', 'Best backpacking tents for 2027', 'Climbers rescued from Mount Rainier', 'Kayakers paddle the Green River', 'National parks see record camping demand', 'Trail running shoes tested'])
+      expect(has(t, 'Sports').has('outdoors') || has(t, 'Other').has('outdoors') || has(t, null).has('outdoors'), t).toBe(true);
+    for (const t of ['Trail Blazers beat Suns', 'Paper trail leads to indictment', 'Cities consider climbing rents']) expect(has(t, null).has('outdoors'), t).toBe(false);
+    expect(has('Camping World shares fall', 'Business').has('outdoors')).toBe(false);
+    expect(has('Backpacking gear maker lands funding round', 'Technology').has('outdoors')).toBe(false);
+    expect(has('Mariners win in extras', 'Sports').has('outdoors')).toBe(false);
+  });
+  it('has its own section feed, its own Front Page block and a Front Page Mix weight', () => {
+    const s = src('General');
+    const hike = story(s, 'Hikers return to the Enchantments after wildfire closure', { ai: 'Outdoors' }), score = story(s, 'Seahawks edge 49ers', { ai: 'Sports' });
+    expect(ids('outdoors')).toEqual([hike]); expect(ids('sports')).toEqual([score]);
+    for (let i = 0; i < 7; i++) story(s, `Backpackers tackle trail ${i} in the Cascades`, { ai: 'Outdoors', ageMin: 10 + i });
+    const block = queryFrontPage(db).sections.find((x) => x.key === 'outdoors'); expect(block!.label).toBe('Outdoors'); expect(block!.items.length).toBeGreaterThan(0);
+  });
+  it('seeds The Trek, Outside and Backpacker as publisher feeds', () => {
+    const names = (SEED_SOURCES.filter((x) => x.categories.includes('Outdoors')).map((x) => [x.name, x.feed])).sort();
+    expect(names).toEqual([['Backpacker', 'https://www.backpacker.com/feed/'], ['Outside', 'https://www.outsideonline.com/feed/'], ['The Trek', 'https://thetrek.co/feed/']]);
+  });
 });
 
 describe('section feeds', () => {

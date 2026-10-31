@@ -219,7 +219,7 @@ function Saved() {
 const MIX_FIELDS: [keyof FrontMix['weights'], string, string][] = [
   ['local', 'Local', 'Des Moines, Federal Way, SeaTac, Kent, Burien and South King County'], ['regional', 'Regional', 'Greater Seattle and the Puget Sound area'], ['washington', 'Washington', 'Statewide news and Olympia'],
   ['us', 'U.S.', 'National news'], ['world', 'World', 'International news'], ['politics', 'Politics', 'Elections, Congress, legislation and government policy'],
-  ['business', 'Business', 'Markets, the economy, companies and energy'], ['technology', 'Technology', 'AI, cybersecurity, software and hardware'], ['sports', 'Sports', 'Sports coverage (blocked subjects stay blocked)'], ['other', 'Other', 'Health, science, automotive and everything else ("More stories")'],
+  ['business', 'Business', 'Markets, the economy, companies and energy'], ['technology', 'Technology', 'AI, cybersecurity, software and hardware'], ['sports', 'Sports', 'Sports coverage (blocked subjects stay blocked)'], ['outdoors', 'Outdoors', 'Hiking, backpacking, camping, climbing and other outdoor recreation'], ['other', 'Other', 'Health, science, automotive and everything else ("More stories")'],
 ];
 function FrontMixPanel({ onChanged }: { onChanged: () => void }) {
   const { data, reload } = useLoad<{ mix: FrontMix; defaults: FrontMix }>('/api/front-mix');

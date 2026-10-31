@@ -172,7 +172,7 @@ describe('API validation & behavior', () => {
   });
   it('diagnostics reports counts, db size, and no secrets', async () => {
     const j = (await call('GET', '/api/diagnostics')).json();
-    expect(j.counts).toHaveProperty('articles'); expect(j.db.approxSizeMB).toBeGreaterThan(0); expect(j.sources).toHaveLength(4);
+    expect(j.counts).toHaveProperty('articles'); expect(j.db.approxSizeMB).toBeGreaterThan(0); expect(j.sources).toHaveLength(7);
     expect(JSON.stringify(j)).not.toMatch(/secret|x{20}|"sec"/i); // neither the session secret (x*40) nor the client secret (sec)
   });
   it('serves a restorable gzipped SQLite backup, only to the signed-in user', async () => {
@@ -184,7 +184,7 @@ describe('API validation & behavior', () => {
     const os = await import('node:os'), fs = await import('node:fs'), path = await import('node:path');
     const f = path.join(os.tmpdir(), 'restore-test-' + Date.now() + '.sqlite'); fs.writeFileSync(f, raw);
     const restored = (await import('../server/db.js')).openDb(f);
-    expect((restored.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(4); restored.close(); fs.rmSync(f);
+    expect((restored.prepare('SELECT COUNT(*) n FROM sources').get() as any).n).toBe(7); restored.close(); fs.rmSync(f);
   });
   it('security headers are set and API responses are not cacheable', async () => {
     const h = await app.inject({ url: '/health' });
