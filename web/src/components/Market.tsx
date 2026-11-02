@@ -39,11 +39,11 @@ export default function Market({ version, onOpenSettings, compact = false }: { v
           return (
             <button key={x.symbol} onClick={() => setSel(sel === x.symbol ? null : x.symbol)} aria-pressed={sel === x.symbol}
               className={`${compact ? 'w-[11rem] px-2 py-1' : 'w-[13rem] px-3 py-2'} flex-none rounded-xl border text-left transition ${sel === x.symbol ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60'}`}>
-              <div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{x.symbol}</span>{x.isDailyNav && <span className="text-[10px] uppercase tracking-wide text-slate-400">NAV</span>}</div>
+              <div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{x.symbol}</span>{x.isDailyNav && <span className="text-[10px] uppercase tracking-wide text-slate-400">NAV</span>}{x.proxy && <span className="text-[10px] tracking-wide text-slate-400" title={`Estimated from ${x.proxy}, an ETF that trades all day`}>via {x.proxy}</span>}</div>
               {x.name && x.name !== x.symbol && <div className="mb-1 line-clamp-2 text-xs text-slate-600 dark:text-slate-300" title={x.name}>{x.name}</div>}
               {x.last != null ? (<>
                 <div className="text-base font-semibold tabular-nums">{fmt(x.last)}</div>
-                {d && !x.isMoneyMarket ? <div title={x.isDailyNav ? '1D: latest published NAV vs the previous published NAV' : '1D: latest daily close vs the previous daily close'} className={`text-xs tabular-nums ${up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{up ? '▲' : '▼'} {fmt(Math.abs(d.change))} ({d.pct >= 0 ? '+' : ''}{d.pct.toFixed(2)}%)</div> : <div className="text-xs text-slate-400">{x.isMoneyMarket ? 'stable NAV' : '—'}</div>}
+                {d && !x.isMoneyMarket ? <div title={x.proxy ? `1D: ${x.proxy} latest price vs its previous close (estimate for the fund)` : x.isDailyNav ? '1D: latest published NAV vs the previous published NAV' : '1D: latest daily close vs the previous daily close'} className={`text-xs tabular-nums ${up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{up ? '▲' : '▼'} {fmt(Math.abs(d.change))} ({d.pct >= 0 ? '+' : ''}{d.pct.toFixed(2)}%)</div> : <div className="text-xs text-slate-400">{x.isMoneyMarket ? 'stable NAV' : '—'}</div>}
               </>) : <div className="mt-1 text-xs text-slate-500" title={x.error ?? ''}>{x.errorKind === 'plan' ? 'Not on your plan' : x.errorKind === 'no_key' ? 'No data source' : x.error ? 'Unavailable' : 'Loading…'}</div>}
             </button>
           );
@@ -52,7 +52,7 @@ export default function Market({ version, onOpenSettings, compact = false }: { v
       {q && (
         <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div><div className="font-semibold">{q.name}</div><div className="text-xs text-slate-500">{q.last != null ? `${q.isDailyNav ? 'Daily NAV' : 'Last close/price'} as of ${q.asOf}` : 'No data'}</div></div>
+            <div><div className="font-semibold">{q.name}</div><div className="text-xs text-slate-500">{q.last != null ? `${q.isDailyNav ? 'Daily NAV' : q.proxy ? `Estimate from ${q.proxy}` : 'Last close/price'} as of ${q.asOf}` : 'No data'}</div></div>
             <div className="flex gap-1" role="tablist">{RANGES.map((r) => { const ok = q.ranges.find((x) => x.range === r)?.available !== false; return <button key={r} role="tab" aria-selected={range === r} title={ok ? undefined : 'Not enough history'} className={`btn !py-1 text-xs ${range === r ? 'btn-primary' : 'btn-ghost'} ${!ok && range !== r ? 'opacity-50' : ''}`} onClick={() => setRange(r)}>{r}</button>; })}</div>
           </div>
           {q.note && <p className="mt-1 text-xs text-slate-500">{q.note}</p>}

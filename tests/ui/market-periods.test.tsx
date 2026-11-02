@@ -6,7 +6,7 @@ import Market from '../../web/src/components/Market';
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const range = (r: string, available: boolean, change: number | null = null, from: string | null = null) => ({ range: r, available, reason: available ? null : 'Not enough history', fromDate: from, toDate: available ? '2026-10-28' : null, change, pct: change === null ? null : change });
 const quote = (symbol: string, over: Record<string, unknown> = {}) => ({
-  symbol, name: symbol, type: 'etf', providerSymbol: symbol, last: 51, asOf: '2026-10-28', fetchedAt: Date.now(), isDailyNav: false, isMoneyMarket: false,
+  symbol, name: symbol, type: 'etf', providerSymbol: symbol, last: 51, asOf: '2026-10-28', fetchedAt: Date.now(), isDailyNav: false, isMoneyMarket: false, proxy: null,
   changes: [{ range: '1D', change: 1, pct: 2 }], ranges: [range('1D', true, 1, '2026-10-27'), range('1W', false), range('1M', false), range('YTD', false), range('1Y', false)],
   changeKind: 'price', includesDistributions: false, error: null, errorKind: null, note: null, ...over,
 });

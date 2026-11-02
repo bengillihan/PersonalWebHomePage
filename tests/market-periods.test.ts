@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { memDb, testConfig } from './helpers.js';
 import { MarketService, periodReturns, RANGES, HISTORY_DAYS, type Range } from '../server/market/service.js';
 import { isBusinessDay } from '../server/market/schedule.js';
@@ -109,6 +109,31 @@ describe('what is being measured is stated honestly', () => {
     const s = svc();
     for (const sym of ['SPY', 'VTSAX']) { const q = quote(s, sym); expect(q.includesDistributions).toBe(false); expect(s.series(sym, '1Y').disclaimer).toMatch(/not total return/i); expect(s.series(sym, '1Y').disclaimer).toMatch(/dividend|distribution/i); }
     expect(quote(s, 'SPY').changeKind).toBe('price'); expect(s.series('SPY', '1Y').kind).toBe('price'); expect(s.series('VTSAX', '1Y').kind).toBe('nav');
+  });
+});
+
+describe('a mutual fund with an ETF mapped is quoted from the ETF', () => {
+  const mapTo = (symbol: string, provider: string | null) => db.prepare('UPDATE watchlist SET provider_symbol = ? WHERE symbol = ?').run(provider, symbol);
+  it('is labelled as an estimate from the ETF, a price change rather than NAV, with no claim that it is the fund\'s NAV', () => {
+    seed('VTWAX', 'mutual_fund', tradingBars('2025-01-02', '2026-10-28'), 'Vanguard Total World Stock Index Admiral'); mapTo('VTWAX', 'VT'); const s = svc();
+    const q = quote(s, 'VTWAX');
+    expect(q).toMatchObject({ proxy: 'VT', isDailyNav: false, changeKind: 'price' }); expect(q.note).toMatch(/estimate from VT/i); expect(q.note).toMatch(/NAV is published once a day/);
+    expect(s.series('VTWAX', '1D')).toMatchObject({ kind: 'price' }); expect(s.series('VTWAX', '1D').basis).toMatch(/estimate from VT/i);
+  });
+  it('a fund quoted as itself (no mapping, or mapped to its own ticker) stays a daily NAV', () => {
+    seed('VTSAX', 'mutual_fund', tradingBars('2025-01-02', '2026-10-28')); const s = svc();
+    expect(quote(s, 'VTSAX')).toMatchObject({ proxy: null, isDailyNav: true, changeKind: 'nav' });
+    mapTo('VTSAX', 'vtsax'); expect(quote(s, 'VTSAX')).toMatchObject({ proxy: null, isDailyNav: true });
+  });
+  it('refreshes on the ETF\'s market-hours schedule (every 10 minutes while open) instead of the once-a-day NAV schedule', async () => {
+    seed('VTWAX', 'mutual_fund', tradingBars('2025-01-02', '2026-10-28')); seed('VTSAX', 'mutual_fund', tradingBars('2025-01-02', '2026-10-28')); mapTo('VTWAX', 'VT');
+    const open = Date.parse('2026-10-28T16:00:00Z'); // 12:00 ET, Wednesday, market open
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(open);
+    try {
+      db.prepare("UPDATE market_prices SET fetched_at = ?, series = ?").run(open - 11 * 60_000, JSON.stringify(tradingBars('2025-01-02', '2026-10-28')));
+      await svc().refreshIfNeeded();
+      expect(providerCalls.map((c) => c.symbol)).toEqual(['VT']); // the proxied fund is due (11 min old); the plain NAV fund is not, and the request goes to the ETF
+    } finally { vi.useRealTimers(); }
   });
 });
 

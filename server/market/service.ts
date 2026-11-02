@@ -16,6 +16,8 @@ export interface QuoteDto {
   last: number | null; asOf: string | null; fetchedAt: number | null; isDailyNav: boolean; isMoneyMarket: boolean;
   changes: RangeChange[]; // only the periods that are actually available
   ranges: PeriodResult[]; // every period, with availability
+  /** The ETF standing in for a mutual fund (its provider symbol), or null. Prices then move intraday, as an estimate of the fund, not its published NAV. */
+  proxy: string | null;
   changeKind: ChangeKind; includesDistributions: false; // price/NAV change only: never a total return
   error: string | null; errorKind: string | null;
   note: string | null;
@@ -75,13 +77,22 @@ export function sliceRange(bars: Bar[], range: Range): Bar[] {
   return i === null ? [] : bars.slice(i);
 }
 
+/** A mutual fund whose provider symbol is a different ticker (an ETF tracking the same index) is quoted from that ETF, which trades all day. */
+export function proxyOf(w: { symbol: string; provider_symbol?: string | null; instrument_type: string }): string | null {
+  const p = w.provider_symbol?.trim().toUpperCase();
+  return w.instrument_type === 'mutual_fund' && p && p !== w.symbol.toUpperCase() ? p : null;
+}
+/** What the stored prices are: NAV only for a fund quoted as itself; an ETF proxy is an ordinary market price. */
+const isNavOf = (w: { symbol: string; provider_symbol?: string | null; instrument_type: string }) => w.instrument_type === 'mutual_fund' && !proxyOf(w);
+
 const DISCLAIMER = {
   price: 'Price change only: excludes dividends and distributions; not total return.',
   nav: 'NAV change only: excludes distributions that a total return would add back; not total return.',
 } as const;
 
-function basisText(range: Range, kind: ChangeKind, p: PeriodResult): string {
+function basisText(range: Range, kind: ChangeKind, p: PeriodResult, proxy: string | null = null): string {
   if (!p.available) return NOT_ENOUGH;
+  if (proxy) return range === '1D' ? `Estimate from ${proxy} (an ETF): its latest price vs its previous close. The fund's own NAV is published once a day after the close and will differ.` : `Estimate from ${proxy} (an ETF): its close on ${p.fromDate} vs ${p.toDate}.`;
   if (range === '1D') return kind === 'nav' ? 'Latest published NAV vs the previous published NAV (daily data; no intraday movement).' : 'Latest daily close vs the previous daily close (daily data only; no intraday data).';
   return `${kind === 'nav' ? 'Published NAV' : 'Daily close'} on ${p.fromDate} vs ${p.toDate}.`;
 }
@@ -113,16 +124,16 @@ export class MarketService {
       const bars: Bar[] = c?.series ? JSON.parse(c.series) : [];
       const last = bars[bars.length - 1];
       const isMM = /money market/i.test(w.name) || w.symbol === 'VMFXX';
-      const isNav = w.instrument_type === 'mutual_fund';
+      const proxy = proxyOf(w); const isNav = isNavOf(w);
       let error: string | null = c?.error ?? null; let errorKind: string | null = null;
       if (!this.provider.configured) { error = 'Market data provider not configured (set TWELVEDATA_API_KEY)'; errorKind = 'no_key'; }
       else if (c?.error) errorKind = /plan/i.test(c.error) ? 'plan' : /rate limit/i.test(c.error) ? 'rate_limit' : 'error';
       return {
         symbol: w.symbol, name: w.name, type: w.instrument_type, providerSymbol: w.provider_symbol || w.symbol,
         last: last?.close ?? null, asOf: last?.date ?? null, fetchedAt: c?.fetched_at ?? null, isDailyNav: isNav,
-        isMoneyMarket: isMM, changes: changesFromBars(bars), ranges: periodReturns(bars), changeKind: isNav ? 'nav' : 'price', includesDistributions: false,
+        isMoneyMarket: isMM, proxy, changes: changesFromBars(bars), ranges: periodReturns(bars), changeKind: isNav ? 'nav' : 'price', includesDistributions: false,
         error: last ? (errorKind === 'no_key' ? error : null) : error, errorKind,
-        note: isMM ? 'Stable NAV (typically $1.00). Yield is a separate figure and is not shown here.' : isNav ? 'Daily published NAV, not an intraday quote.' : null,
+        note: isMM ? 'Stable NAV (typically $1.00). Yield is a separate figure and is not shown here.' : proxy ? `Estimate from ${proxy}, an ETF that trades all day. The fund's own NAV is published once a day after the close and will differ slightly.` : isNav ? 'Daily published NAV, not an intraday quote.' : null,
       };
     });
   }
@@ -130,11 +141,11 @@ export class MarketService {
   /** The chart for one period, from cached history only (no provider call). Spans exactly the period the return is calculated over. */
   series(symbol: string, range: Range): SeriesDto {
     const c = this.db.prepare("SELECT series FROM market_prices WHERE symbol = ? AND range = 'daily'").get(symbol) as any;
-    const type = (this.db.prepare('SELECT instrument_type t FROM watchlist WHERE symbol = ?').get(symbol) as { t: string } | undefined)?.t;
-    const kind: ChangeKind = type === 'mutual_fund' ? 'nav' : 'price';
+    const w = this.row(symbol); const proxy = w ? proxyOf(w) : null;
+    const kind: ChangeKind = w && isNavOf(w) ? 'nav' : 'price';
     const bars: Bar[] = c?.series ? JSON.parse(c.series) : [];
     const p = periodReturns(bars).find((x) => x.range === range)!;
-    return { symbol, range, bars: sliceRange(bars, range), available: p.available, reason: p.reason, fromDate: p.fromDate, toDate: p.toDate, change: p.change, pct: p.pct, kind, basis: basisText(range, kind, p), disclaimer: DISCLAIMER[kind] };
+    return { symbol, range, bars: sliceRange(bars, range), available: p.available, reason: p.reason, fromDate: p.fromDate, toDate: p.toDate, change: p.change, pct: p.pct, kind, basis: basisText(range, kind, p, proxy), disclaimer: DISCLAIMER[kind] };
   }
 
   /** Refreshes only instruments whose schedule says new data should exist. Serial, spaced to respect per-minute limits. */
@@ -162,7 +173,7 @@ export class MarketService {
       const c = this.db.prepare("SELECT * FROM market_prices WHERE symbol = ? AND range = 'daily'").get(w.symbol) as any;
       const hadError = Boolean(c?.error);
       const lastBar = c?.series ? (JSON.parse(c.series) as Bar[]).at(-1)?.date ?? null : null;
-      if (!force && !needsRefresh(w.instrument_type, { fetchedAt: c?.fetched_at ?? null, lastBarDate: lastBar, hadError }, now)) continue;
+      if (!force && !needsRefresh(w.instrument_type === 'mutual_fund' && proxyOf(w) ? 'etf' : w.instrument_type, { fetchedAt: c?.fetched_at ?? null, lastBarDate: lastBar, hadError }, now)) continue;
       if (force && c && now - c.fetched_at < 60_000) continue;
       const key = MarketService.mappingKey(w); // captured before the request
       const current = () => { const n = this.row(w.symbol); return n !== undefined && MarketService.mappingKey(n) === key; };
@@ -171,14 +182,14 @@ export class MarketService {
         if (!current()) { this.rerun = true; continue; } // remapped or removed while in flight: this answer belongs to a different instrument
         const ch = changesFromBars(s.bars).find((r) => r.range === '1D');
         const last = s.bars[s.bars.length - 1];
-        put.run(w.symbol, Date.now(), last.close, ch?.change ?? null, ch?.pct ?? null, last.date, w.instrument_type === 'mutual_fund' ? 1 : 0, JSON.stringify(s.bars), null);
+        put.run(w.symbol, Date.now(), last.close, ch?.change ?? null, ch?.pct ?? null, last.date, isNavOf(w) ? 1 : 0, JSON.stringify(s.bars), null);
       } catch (e) {
         // Our shared limiter deferred this call: nothing was sent, so nothing is recorded (cached prices and their timestamps stay as they were) and the
         // rest of the run is skipped. The next user-triggered refresh after the window tries again; no timer is set.
         if (e instanceof ProviderError && e.kind === 'rate_limit' && e.retryAfterMs !== undefined) { this.deferredUntil = Date.now() + e.retryAfterMs; break; }
         if (!current()) { this.rerun = true; continue; }
         const msg = (e as Error).message;
-        put.run(w.symbol, Date.now(), null, null, null, null, w.instrument_type === 'mutual_fund' ? 1 : 0, null, msg);
+        put.run(w.symbol, Date.now(), null, null, null, null, isNavOf(w) ? 1 : 0, null, msg);
         if (e instanceof ProviderError && (e.kind === 'rate_limit' || e.kind === 'no_key')) break;
       }
     }
